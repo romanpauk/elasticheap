@@ -5,32 +5,34 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 
+#pragma once
+
 #include <containers/lockfree/detail/hazard_era_allocator.h>
 
 #include <atomic>
 #include <memory>
 
-// Simple, fast, and practical non-blocking and blocking concurrent queue algorithms.
-// http://www.cs.rochester.edu/~scott/papers/1996_PODC_queues.pdf
-
 namespace containers
 {
-    template< typename T > struct queue_node
+    // Simple, fast, and practical non-blocking and blocking concurrent queue algorithms.
+    // http://www.cs.rochester.edu/~scott/papers/1996_PODC_queues.pdf
+    template < typename T, typename Allocator = hazard_era_allocator< T >, typename Backoff = exp_backoff<> > class queue
     {
-        T value;
-        std::atomic< queue_node< T >* > next;
-    };
+        struct queue_node
+        {
+            T value;
+            std::atomic< queue_node* > next;
+        };
 
-    template < typename T, typename Allocator = hazard_era_allocator< queue_node< T >, 2 > > class queue
-    {
-    private:
-        Allocator allocator_;
-
-        alignas(64) std::atomic< queue_node< T >* > head_;
-        alignas(64) std::atomic< queue_node< T >* > tail_;
+        using allocator_type = typename Allocator::template rebind< queue_node >::other;
+        allocator_type& allocator_;
+        
+        alignas(64) std::atomic< queue_node* > head_;
+        alignas(64) std::atomic< queue_node* > tail_;
 
     public:
-        queue()
+        queue(Allocator& allocator = Allocator::instance())
+            : allocator_(*reinterpret_cast<allocator_type*>(&allocator))
         {
             auto n = allocator_.allocate();
             n->next = nullptr;
@@ -45,11 +47,14 @@ namespace containers
         
         template< typename Ty > void push(Ty&& value)
         {
+            auto guard = allocator_.guard();
             auto n = allocator_.allocate(std::forward< Ty >(value), nullptr);
+            Backoff backoff;
             while(true)
             {
-                auto tail = allocator_.template protect<0>(tail_, std::memory_order_relaxed);
-                auto next = allocator_.template protect<1>(tail->next, std::memory_order_relaxed);
+                // TODO: could this benefit from protecting multiple variables in one call?
+                auto tail = allocator_.protect(tail_, std::memory_order_relaxed);
+                auto next = allocator_.protect(tail->next, std::memory_order_relaxed);
                 if (tail == tail_.load())
                 {
                     if (next == nullptr)
@@ -59,6 +64,8 @@ namespace containers
                             tail_.compare_exchange_weak(tail, n);
                             break;
                         }
+                        else
+                            backoff();
                     }
                     else
                     {
@@ -70,10 +77,12 @@ namespace containers
 
         bool pop(T& value)
         {
+            auto guard = allocator_.guard();
+            Backoff backoff;
             while (true)
             {
-                auto head = allocator_.template protect<0>(head_, std::memory_order_relaxed);
-                auto next = allocator_.template protect<1>(head->next, std::memory_order_relaxed);
+                auto head = allocator_.protect(head_, std::memory_order_relaxed);
+                auto next = allocator_.protect(head->next, std::memory_order_relaxed);
                 auto tail = tail_.load();
                 if (head == head_.load())
                 {
@@ -89,9 +98,11 @@ namespace containers
                         value = next->value;
                         if (head_.compare_exchange_weak(head, next))
                         {
-                            allocator_.deallocate(head);
+                            allocator_.retire(head);
                             return true;
                         }
+                        else
+                            backoff();
                     }
                 }
             }
