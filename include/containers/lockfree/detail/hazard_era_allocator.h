@@ -16,46 +16,33 @@
 #include <array>
 #include <vector>
 #include <atomic>
+#include <algorithm>
 
+#if defined(_WIN32)
 #define NOMINMAX
 #include <windows.h>
+#else
+// TODO
+#include <unistd.h>
+#include <sys/types.h>
+static size_t GetCurrentThreadId() { return gettid(); }
+#endif
 
-namespace containers
+namespace containers::detail
 {
-    template< size_t N > struct is_power_of_2 { static constexpr bool value = (N & (N - 1)) == 0; };
-
-    template< size_t Initial = 256, size_t Max = 65536 > struct exp_backoff
-    {
-        static_assert(is_power_of_2< Initial >::value);
-        static_assert(is_power_of_2< Max >::value);
-
-        void operator() ()
-        {
-            size_t iters = state_;
-            if((state_ <<= 1) >= Max)
-                state_ = Max;
-
-            while (iters--)
-                _mm_pause();
-        }
-
-    private:
-        size_t state_ = Initial;
-    };
-
     template< typename ThreadManager > struct thread_guard
     {
         ~thread_guard() { manager->clear(); }
         ThreadManager* manager;
     };
 
-    template< size_t N = 128 > class thread_manager
+    template< size_t N = 1024 > class thread_manager
     {
         friend class thread_guard< thread_manager< N > >;
 
         struct thread_registration
         {
-            thread_registration(std::array< aligned< std::atomic< uint64_t > >, N >& threads)
+            thread_registration(std::array< detail::aligned< std::atomic< uint64_t > >, N >& threads)
                 : threads_(threads)
             {                
                 for (size_t i = 0; i < threads_.size(); ++i)
@@ -85,7 +72,7 @@ namespace containers
             }
         
             size_t index_;
-            std::array< aligned< std::atomic< uint64_t > >, N >& threads_;
+            std::array< detail::aligned< std::atomic< uint64_t > >, N >& threads_;
         };
 
     public:
@@ -119,25 +106,22 @@ namespace containers
         };       
 
         alignas(64) std::atomic< uint64_t > era = 1;
-        alignas(64) std::array< aligned< thread_reservation >, N > reservations;
-        alignas(64) std::array < aligned< std::atomic< uint64_t > >, N > thread_ids;
+        alignas(64) std::array< detail::aligned< thread_reservation >, N > reservations;
+        alignas(64) std::array < detail::aligned< std::atomic< uint64_t > >, N > thread_ids;
     };
     
     using thread = thread_manager<>;
 
-    // - Thread ADT state - shared between all ADT<T>'s of concrete T
-    //      allocator<T, ThreadManager> allocator(threads);
-    //          thread-local data for T
-    //
-    //  - ADT state - state of concrete ADT
-    //      queue< T, Allocator > queue(allocator);
-
     template< typename T, typename ThreadManager = thread, typename Allocator = std::allocator< T > > class hazard_era_allocator
     {
         static const int freq = 1024;
-        static_assert(is_power_of_2< freq >::value);
+        static_assert(freq % 2 == 0);
 
-        struct hazard_buffer
+        // TODO: the alignas(64) is a workaround for a crash due to 
+        // hazard_allocator<T>::hazard_buffer having different alignments based on T's alignments
+        // This is caused by treating all hazard_allocator<T>s as the same and reinterpret_casting
+        // between them
+        struct alignas(64) hazard_buffer
         {
             template< typename... Args > hazard_buffer(uint64_t era, Args&&... args)
                 : value{std::forward< Args >(args)...}
@@ -164,7 +148,7 @@ namespace containers
             }
         };
 
-        alignas(64) std::array< aligned< thread_data >, ThreadManager::max_threads > thread_;
+        alignas(64) std::array< detail::aligned< thread_data >, ThreadManager::max_threads > thread_;
 
         using allocator_type = typename std::allocator_traits< Allocator >::template rebind_alloc< hazard_buffer >;
         using allocator_traits_type = std::allocator_traits< allocator_type >;
@@ -196,7 +180,7 @@ namespace containers
             allocator_traits_type::construct(allocator_, buffer,
                 thread_manager_.era.load(std::memory_order_acquire), std::forward< Args >(args)...);
 
-            if (thread_[thread_id()].allocated++ % freq == 0)
+            if ((thread_[thread_id()].allocated++ & (freq - 1)) == 0)
                 thread_manager_.era.fetch_add(1, std::memory_order_release);
 
             return &buffer->value;
@@ -217,34 +201,20 @@ namespace containers
             }
         }
 
-        T* protect(T* value, std::memory_order order = std::memory_order_seq_cst)
-        {
-            uint64_t max_era = thread_manager_.reservations[thread_id()].max_era.load(std::memory_order_relaxed);
-            while (true)
-            {
-                uint64_t era = thread_manager_.era.load(std::memory_order_acquire);
-                if (max_era == era) return value;
-                if (max_era == 0)
-                    thread_manager_.reservations[thread_id()].min_era.store(era, std::memory_order_release);
-                thread_manager_.reservations[thread_id()].max_era.store(era, std::memory_order_release);
-                max_era = era;
-            }
-        }
-
         void retire(T* ptr)
         {
             auto buffer = hazard_buffer_cast(ptr);
-            buffer->retired = thread_manager_.era.load(std::memory_order_relaxed);
+            buffer->retired = thread_manager_.era.load(std::memory_order_acquire);
             thread_[thread_id()].retired_buffers.push_back(buffer);
 
-            if (thread_[thread_id()].retired++ % freq == 0)
+            if ((thread_[thread_id()].retired++ & (freq - 1)) == 0)
             {
                 thread_manager_.era.fetch_add(1, std::memory_order_release);
                 cleanup();
             }
         }
 
-        void deallocate_unsafe(T* ptr)
+        void deallocate(T* ptr)
         {
             auto buffer = hazard_buffer_cast(ptr);
             allocator_traits_type::destroy(allocator_, buffer);
@@ -314,7 +284,7 @@ namespace containers
 
         hazard_buffer* hazard_buffer_cast(T* ptr)
         {
-            return reinterpret_cast<hazard_buffer*>(reinterpret_cast<uintptr_t>(ptr) - offsetof(hazard_buffer, value));
+            return reinterpret_cast< hazard_buffer* >(reinterpret_cast<uintptr_t>(ptr) - offsetof(hazard_buffer, value));
         }
     };
 }

@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <containers/lockfree/detail/exponential_backoff.h>
 #include <containers/lockfree/detail/hazard_era_allocator.h>
 
 #include <atomic>
@@ -14,47 +15,54 @@
 
 namespace containers
 {
+    //
     // Simple, fast, and practical non-blocking and blocking concurrent queue algorithms.
     // http://www.cs.rochester.edu/~scott/papers/1996_PODC_queues.pdf
-    template < typename T, typename Allocator = hazard_era_allocator< T >, typename Backoff = exp_backoff<> > class queue
+    //
+    template <
+        typename T,
+        typename Allocator = detail::hazard_era_allocator< T >,
+        typename Backoff = detail::exponential_backoff<>
+    > class unbounded_queue
     {
-        struct queue_node
+        struct node
         {
+            std::atomic< node* > next{};
             T value;
-            std::atomic< queue_node* > next;
         };
 
-        using allocator_type = typename Allocator::template rebind< queue_node >::other;
+        using allocator_type = typename Allocator::template rebind< node >::other;
         allocator_type& allocator_;
-        
-        alignas(64) std::atomic< queue_node* > head_;
-        alignas(64) std::atomic< queue_node* > tail_;
+
+        alignas(64) std::atomic< node* > head_;
+        alignas(64) std::atomic< node* > tail_;
 
     public:
-        queue(Allocator& allocator = Allocator::instance())
+        using value_type = T;
+
+        unbounded_queue(Allocator& allocator = Allocator::instance())
             : allocator_(*reinterpret_cast<allocator_type*>(&allocator))
         {
             auto n = allocator_.allocate();
-            n->next = nullptr;
-            head_.store(n, std::memory_order_relaxed);
-            tail_.store(n, std::memory_order_relaxed);
+            head_.store(n);
+            tail_.store(n);
         }
 
-        ~queue()
+        ~unbounded_queue()
         {
             clear();
         }
-        
-        template< typename Ty > void push(Ty&& value)
+
+        template< typename... Args > void emplace(Args&&... args)
         {
             auto guard = allocator_.guard();
-            auto n = allocator_.allocate(std::forward< Ty >(value), nullptr);
+            auto n = allocator_.allocate(nullptr, T{std::forward< Args >(args)...});
             Backoff backoff;
-            while(true)
+            while (true)
             {
                 // TODO: could this benefit from protecting multiple variables in one call?
-                auto tail = allocator_.protect(tail_, std::memory_order_relaxed);
-                auto next = allocator_.protect(tail->next, std::memory_order_relaxed);
+                auto tail = allocator_.protect(tail_);
+                auto next = allocator_.protect(tail->next);
                 if (tail == tail_.load())
                 {
                     if (next == nullptr)
@@ -64,16 +72,19 @@ namespace containers
                             tail_.compare_exchange_weak(tail, n);
                             break;
                         }
-                        else
-                            backoff();
                     }
                     else
                     {
                         tail_.compare_exchange_weak(tail, next);
                     }
                 }
+
+                backoff();
             }
         }
+
+        void push(const T& value) { return emplace(value); }
+        void push(T&& value) { return emplace(std::move(value)); }
 
         bool pop(T& value)
         {
@@ -81,14 +92,14 @@ namespace containers
             Backoff backoff;
             while (true)
             {
-                auto head = allocator_.protect(head_, std::memory_order_relaxed);
-                auto next = allocator_.protect(head->next, std::memory_order_relaxed);
+                auto head = allocator_.protect(head_);
                 auto tail = tail_.load();
+                auto next = allocator_.protect(head->next);
                 if (head == head_.load())
                 {
                     if (head == tail)
                     {
-                        if(next == nullptr)
+                        if (next == nullptr)
                             return false;
 
                         tail_.compare_exchange_weak(tail, next);
@@ -96,16 +107,22 @@ namespace containers
                     else
                     {
                         value = next->value;
+
                         if (head_.compare_exchange_weak(head, next))
                         {
                             allocator_.retire(head);
                             return true;
                         }
-                        else
-                            backoff();
                     }
                 }
+
+                backoff();
             }
+        }
+
+        bool empty() const
+        {
+            return head_.load() == tail_.load();
         }
 
     private:
@@ -115,7 +132,7 @@ namespace containers
             while (head)
             {
                 auto next = head->next.load();
-                allocator_.deallocate_unsafe(head);
+                allocator_.deallocate(head);
                 head = next;
             }
         }

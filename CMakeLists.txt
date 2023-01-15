@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.22)
 project(containers VERSION 0.1)
 include(FetchContent)
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(CMAKE_CXX_EXTENSIONS NO)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 enable_testing()
-option(CONTAINERS_ENABLE_TESTING "enable testing through googletest" OFF)
+option(CONTAINERS_ENABLE_TESTING "enable testing through googletest" ON)
 option(CONTAINERS_ENABLE_BENCHMARK "enable benchmarking through googlebenchmark" ON)
 
 find_program(CCACHE_FOUND ccache)
@@ -40,10 +40,16 @@ add_library(containers INTERFACE)
 target_include_directories(containers INTERFACE include)
 
 target_sources(containers INTERFACE
-    include/containers/lockfree/queue.h
+    include/containers/lockfree/atomic16.h
+    include/containers/lockfree/bounded_queue.h
+    include/containers/lockfree/bounded_queue_bbq.h
+    include/containers/lockfree/bounded_stack.h
     include/containers/lockfree/stack.h
-    include/containers/lockfree/counter.h
+    include/containers/lockfree/unbounded_queue.h
+    include/containers/lockfree/unbounded_stack.h
     include/containers/lockfree/detail/aligned.h
+    include/containers/lockfree/detail/atomic16_win32.h
+    include/containers/lockfree/detail/exponential_backoff.h
     include/containers/lockfree/detail/hazard_era_allocator.h
     README.md
 )
@@ -51,11 +57,31 @@ target_sources(containers INTERFACE
 if(CONTAINERS_ENABLE_BENCHMARK)
     add_executable(containers_benchmark
         benchmark/main.cpp
-        # benchmark/lockfree/counter.cpp
+        benchmark/lockfree/atomic.cpp
         benchmark/lockfree/stack.cpp
         benchmark/lockfree/queue.cpp
     )
 
-    target_link_libraries(containers_benchmark containers benchmark::benchmark)
+    target_link_libraries(containers_benchmark 
+        containers 
+        benchmark::benchmark
+        $<$<PLATFORM_ID:Linux>:atomic>
+    )
     target_include_directories(containers_benchmark PRIVATE benchmark)
+endif()
+
+if(CONTAINERS_ENABLE_TESTING)
+    add_executable(containers_test
+        test/atomic.cpp
+        test/queue.cpp
+        test/stack.cpp
+    )
+
+    add_test(NAME containers_test COMMAND containers_test)
+    target_link_libraries(containers_test 
+        containers	
+        gtest_main
+        $<$<PLATFORM_ID:Linux>:atomic>
+    )
+    target_include_directories(containers_test PRIVATE test)
 endif()

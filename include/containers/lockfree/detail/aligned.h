@@ -9,7 +9,7 @@
 
 #include <type_traits>
 
-namespace containers
+namespace containers::detail
 {
     template< typename T, size_t Alignment = 64 > struct alignas(Alignment) aligned : T
     {
