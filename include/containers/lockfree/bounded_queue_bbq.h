@@ -243,9 +243,10 @@ namespace containers
 
         ~bounded_queue_bbq()
         {
+            // TODO: iterate only blocks that are unconsumed
             for (auto& block: blocks_)
             {
-                for (size_t i = block.consumed; i < block.committed; ++i)
+                for (size_t i = Cursor(block.consumed).offset; i < Cursor(block.committed).offset; ++i)
                 {
                     block.entries[i].~T();
                 }
