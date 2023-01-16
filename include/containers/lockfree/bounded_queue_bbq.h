@@ -8,6 +8,7 @@
 #pragma once
 
 #include <containers/lockfree/detail/exponential_backoff.h>
+#include <containers/lockfree/detail/uninitialized_array.h>
 
 #include <atomic>
 #include <memory>
@@ -67,7 +68,7 @@ namespace containers
             alignas(64) std::atomic< uint64_t > committed;
             alignas(64) std::atomic< uint64_t > reserved;
             alignas(64) std::atomic< uint64_t > consumed;
-            alignas(64) std::array< T, BlockSize > entries;
+            alignas(64) detail::uninitialized_array< T, BlockSize > entries;
         };
 
         struct Entry
@@ -103,7 +104,7 @@ namespace containers
 
         template< typename... Args > void commit_entry(Entry entry, Args&&... args)
         {
-            entry.block->entries[entry.offset] = T{std::forward< Args >(args)...};
+            new(&entry.block->entries[entry.offset]) T{std::forward< Args >(args)...};
             entry.block->committed.fetch_add(1);
         }
 
@@ -138,14 +139,25 @@ namespace containers
             }
         }
 
-        std::optional< T > consume_entry(Entry entry)
+        void consume_entry(Entry entry, std::optional< T >& value)
         {
-            std::optional< T > data = entry.block->entries[entry.offset];
+            value.emplace(std::move(entry.block->entries[entry.offset]));
+            entry.block->entries[entry.offset].~T();
             entry.block->consumed.fetch_add(1);
             // Drop-old mode:
             //auto allocated = entry.block->allocated.load();
-            //if(allocated.version != entry.version) data.reset();
-            return data;
+            //if(allocated.version != entry.version) value.reset();
+            //return data;
+        }
+
+        void consume_entry(Entry entry, T& value)
+        {
+            value = std::move(entry.block->entries[entry.offset]);
+            entry.block->entries[entry.offset].~T();
+            entry.block->consumed.fetch_add(1);
+            // Drop-old mode:
+            //auto allocated = entry.block->allocated.load();
+            //if(allocated.version != entry.version) value.reset();
         }
 
         status advance_phead(Cursor head)
@@ -229,6 +241,17 @@ namespace containers
             }
         }
 
+        ~bounded_queue_bbq()
+        {
+            for (auto& block: blocks_)
+            {
+                for (size_t i = block.consumed; i < block.committed; ++i)
+                {
+                    block.entries[i].~T();
+                }
+            }
+        }
+
         template< typename... Args > bool emplace(Args&&... args)
         {
             Backoff backoff;
@@ -260,7 +283,7 @@ namespace containers
         bool push(const T& value) { return emplace(value); }
         bool push(T&& value) { return emplace(std::move(value)); }
 
-        bool pop(T& value)
+        template< typename Result > bool pop(Result& result)
         {
             Backoff backoff;
             while (true)
@@ -269,15 +292,9 @@ namespace containers
                 auto [status, entry] = reserve_entry(block, backoff);
                 switch (status)
                 {
-                case status::success: {
-                    auto opt = consume_entry(entry);
-                    if (opt)
-                    {
-                        value = std::move(*opt);
-                        return true;
-                    }
-                    break;
-                }
+                case status::success:
+                    consume_entry(entry, result);
+                    return true;
                 case status::fail: return false;
                 case status::busy: break;
                 case status::block_done:

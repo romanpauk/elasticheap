@@ -1,4 +1,4 @@
-//
+//  
 // This file is part of containers project <https://github.com/romanpauk/containers>
 //
 // See LICENSE for license and copyright information
@@ -51,4 +51,59 @@ TYPED_TEST(queue_test, basic_operations)
     }
 }
 
+TEST(bounded_queue_bbq_test, nondefault_entry)
+{
+    size_t dtors{};
 
+    struct nondefault
+    {
+        nondefault(size_t* counter)
+            : counter_(counter)
+        {}
+
+        nondefault(const nondefault&) = delete;
+
+        nondefault(nondefault&& other)
+            : counter_(other.counter_)
+        {
+            other.counter_ = 0;
+        }
+      
+        nondefault& operator = (nondefault&& other)
+        {
+            counter_ = other.counter_;
+            other.counter_ = 0;
+            return *this;
+        }
+
+        nondefault& operator = (const nondefault& other) = delete;
+
+        ~nondefault() { if(counter_) ++*counter_; }
+
+    private:
+        size_t* counter_;
+    };
+
+    {
+        containers::bounded_queue_bbq< nondefault, queue_size * 2 > queue;
+        queue.emplace(&dtors);
+        queue.emplace(&dtors);
+    }
+
+    ASSERT_EQ(dtors, 2);
+    dtors = 0;
+
+    {
+        std::optional< nondefault > tmp;
+        {
+            containers::bounded_queue_bbq< nondefault, queue_size * 2 > queue;
+            queue.emplace(&dtors);
+            queue.emplace(&dtors);
+            ASSERT_EQ(queue.pop(tmp), true);
+            ASSERT_EQ(dtors, 0);
+        }
+
+        ASSERT_EQ(dtors, 1); // One element left in queue
+    }
+    ASSERT_EQ(dtors, 2); // ~tmp
+}
