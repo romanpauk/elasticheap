@@ -34,7 +34,7 @@ namespace containers
         using allocator_type = typename Allocator::template rebind< node >::other;
         allocator_type& allocator_;
 
-        alignas(64) std::atomic< node* > head_;
+        alignas(64) std::atomic< node* > head_{};
 
     public:
         using value_type = T;
