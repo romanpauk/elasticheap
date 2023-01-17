@@ -8,7 +8,7 @@
 #pragma once
 
 #include <containers/lockfree/detail/exponential_backoff.h>
-#include <containers/lockfree/detail/uninitialized_array.h>
+#include <containers/lockfree/detail/optional.h>
 
 #include <atomic>
 #include <memory>
@@ -68,7 +68,7 @@ namespace containers
             alignas(64) std::atomic< uint64_t > committed;
             alignas(64) std::atomic< uint64_t > reserved;
             alignas(64) std::atomic< uint64_t > consumed;
-            alignas(64) detail::uninitialized_array< T, BlockSize > entries;
+            alignas(64) std::array< detail::optional< T >, BlockSize > entries;
         };
 
         struct Entry
@@ -141,8 +141,8 @@ namespace containers
 
         void consume_entry(Entry entry, std::optional< T >& value)
         {
-            value.emplace(std::move(entry.block->entries[entry.offset]));
-            entry.block->entries[entry.offset].~T();
+            value.emplace(std::move(entry.block->entries[entry.offset].value()));
+            entry.block->entries[entry.offset].reset();
             entry.block->consumed.fetch_add(1);
             // Drop-old mode:
             //auto allocated = entry.block->allocated.load();
@@ -152,8 +152,8 @@ namespace containers
 
         void consume_entry(Entry entry, T& value)
         {
-            value = std::move(entry.block->entries[entry.offset]);
-            entry.block->entries[entry.offset].~T();
+            value = std::move(entry.block->entries[entry.offset].value());
+            entry.block->entries[entry.offset].reset();
             entry.block->consumed.fetch_add(1);
             // Drop-old mode:
             //auto allocated = entry.block->allocated.load();
@@ -248,7 +248,7 @@ namespace containers
             {
                 for (size_t i = Cursor(block.consumed).offset; i < Cursor(block.committed).offset; ++i)
                 {
-                    block.entries[i].~T();
+                    block.entries[i].reset();
                 }
             }
         }

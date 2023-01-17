@@ -9,6 +9,7 @@
 
 #include <containers/lockfree/detail/exponential_backoff.h>
 #include <containers/lockfree/detail/hazard_era_allocator.h>
+#include <containers/lockfree/detail/optional.h>
 
 #include <atomic>
 #include <memory>
@@ -27,8 +28,10 @@ namespace containers
     {
         struct node
         {
+            ~node() { value.reset(); }
+
             std::atomic< node* > next{};
-            T value;
+            detail::optional< T > value;
         };
 
         using allocator_type = typename Allocator::template rebind< node >::other;
@@ -106,7 +109,7 @@ namespace containers
                     }
                     else
                     {
-                        value = next->value;
+                        value = next->value.value();
 
                         if (head_.compare_exchange_weak(head, next))
                         {

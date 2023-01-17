@@ -50,6 +50,7 @@ target_sources(containers INTERFACE
     include/containers/lockfree/detail/atomic16_win32.h
     include/containers/lockfree/detail/exponential_backoff.h
     include/containers/lockfree/detail/hazard_era_allocator.h
+    include/containers/lockfree/detail/optional.h
     README.md
 )
 
