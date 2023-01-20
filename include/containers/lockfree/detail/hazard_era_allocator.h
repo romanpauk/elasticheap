@@ -65,10 +65,9 @@ namespace containers::detail
         alignas(64) std::atomic< uint64_t > era = 1;
         alignas(64) std::array< detail::aligned< thread_reservation >, ThreadManager::max_threads > reservations;
 
-        class thread_guard
+        struct thread_guard
         {
-        public:
-            ~thread_guard() { hazard_era_allocator_base< ThreadManager >::instance().clear(); }
+            ~thread_guard() { instance().clear_reservations(ThreadManager::instance().id()); }
         };
 
         static hazard_era_allocator_base< ThreadManager >& instance()
@@ -83,19 +82,11 @@ namespace containers::detail
         {
             struct thread_destructor
             {
-                ~thread_destructor()
-                {
-                    // Clean thread's thread-local data
-                    instance().thread[ThreadManager::instance().id()].clear();
-
-                    // Clean threads's era reservations
-                    instance().clear();
-                }
+                ~thread_destructor() { instance().clear(ThreadManager::instance().id()); }
             };
 
             // Register thread first, dtor second, so dtor runs before thread gets unregistered
-            // TODO: not sure how valid 'this' will be when last thread will get destroyed...
-
+            
             static thread_local size_t id = ThreadManager::instance().id();
             static thread_local thread_destructor dtor;
 
@@ -135,11 +126,16 @@ namespace containers::detail
             }), buffers.end());
         }
 
-        void clear()
+        void clear_reservations(size_t tid)
         {
-            size_t tid = thread_id();
             reservations[tid].min_era.store(0, std::memory_order_relaxed);
             reservations[tid].max_era.store(0, std::memory_order_relaxed);
+        }
+
+        void clear(size_t tid)
+        {
+            thread[tid].clear();
+            clear_reservations(tid);
         }
     };
 
