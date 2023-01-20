@@ -35,7 +35,7 @@ namespace containers
         };
 
         using allocator_type = typename Allocator::template rebind< node >::other;
-        allocator_type& allocator_;
+        allocator_type allocator_;
 
         alignas(64) std::atomic< node* > head_;
         alignas(64) std::atomic< node* > tail_;
@@ -43,8 +43,8 @@ namespace containers
     public:
         using value_type = T;
 
-        unbounded_queue(Allocator& allocator = Allocator::instance())
-            : allocator_(*reinterpret_cast<allocator_type*>(&allocator))
+        unbounded_queue(Allocator allocator = Allocator())
+            : allocator_(allocator)
         {
             auto n = allocator_.allocate();
             head_.store(n);

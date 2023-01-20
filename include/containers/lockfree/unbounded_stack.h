@@ -35,15 +35,15 @@ namespace containers
         };
 
         using allocator_type = typename Allocator::template rebind< node >::other;
-        allocator_type& allocator_;
+        allocator_type allocator_;
 
         alignas(64) std::atomic< node* > head_{};
 
     public:
         using value_type = T;
 
-        unbounded_stack(Allocator& allocator = Allocator::instance())
-            : allocator_(*reinterpret_cast<allocator_type*>(&allocator))
+        unbounded_stack(Allocator allocator = Allocator())
+            : allocator_(allocator)
         {}
 
         ~unbounded_stack()
@@ -136,15 +136,15 @@ namespace containers
         };
 
         using allocator_type = typename Allocator::template rebind< node >::other;
-        allocator_type& allocator_;
+        allocator_type allocator_;
 
         alignas(64) std::atomic< node* > head_{};
 
     public:
         using value_type = T;
 
-        unbounded_blocked_stack(Allocator& allocator = Allocator::instance())
-            : allocator_(*reinterpret_cast<allocator_type*>(&allocator))
+        unbounded_blocked_stack(Allocator allocator = Allocator())
+            : allocator_(allocator)
         {
             head_ = allocator_.allocate();
         }

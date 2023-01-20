@@ -11,6 +11,7 @@
 // Universal Wait-Free Memory Reclamation - https://arxiv.org/abs/2001.01999
 
 #include <containers/lockfree/detail/aligned.h>
+#include <containers/lockfree/detail/thread_manager.h>
 
 #include <cassert>
 #include <array>
@@ -18,121 +19,26 @@
 #include <atomic>
 #include <algorithm>
 
-#if defined(_WIN32)
-#define NOMINMAX
-#include <windows.h>
-#else
-// TODO
-#include <unistd.h>
-#include <sys/types.h>
-static size_t GetCurrentThreadId() { return gettid(); }
-#endif
-
 namespace containers::detail
 {
-    template< typename ThreadManager > struct thread_guard
+    template< typename ThreadManager = thread > class hazard_era_allocator_base
     {
-        ~thread_guard() { manager->clear(); }
-        ThreadManager* manager;
-    };
-
-    template< size_t N = 1024 > class thread_manager
-    {
-        friend class thread_guard< thread_manager< N > >;
-
-        struct thread_registration
-        {
-            thread_registration(std::array< detail::aligned< std::atomic< uint64_t > >, N >& threads)
-                : threads_(threads)
-            {                
-                for (size_t i = 0; i < threads_.size(); ++i)
-                {
-                    auto tid = threads_[i].load(std::memory_order_relaxed);
-                    if (!tid)
-                    {
-                        if (threads_[i].compare_exchange_strong(tid, GetCurrentThreadId()))
-                        {
-                            index_ = i;
-                            return;
-                        }
-                    }
-                    else if (tid == GetCurrentThreadId())
-                    {
-                        // Check for multiple thread registrations of the same thread
-                        break;
-                    }
-                }
-
-                std::abort();
-            }
-
-            ~thread_registration()
-            {
-                threads_[index_].store(0);
-            }
-        
-            size_t index_;
-            std::array< detail::aligned< std::atomic< uint64_t > >, N >& threads_;
-        };
-
     public:
-        static const int max_threads = N;
-
-        thread_guard< thread_manager< N > > guard() { return { this }; }
-
-        static thread_manager< N >& instance()
+        struct hazard_buffer_header
         {
-            static thread_manager< N > instance;
-            return instance;
-        }
-
-        size_t id()
-        {
-            static thread_local thread_registration registration(thread_ids);
-            return registration.index_;
-        }
-
-    //protected:
-        void clear()
-        {
-            reservations[id()].min_era.store(0, std::memory_order_relaxed);
-            reservations[id()].max_era.store(0, std::memory_order_relaxed);
-        }
-
-        struct thread_reservation
-        {
-            std::atomic< uint64_t > min_era;
-            std::atomic< uint64_t > max_era;
-        };       
-
-        alignas(64) std::atomic< uint64_t > era = 1;
-        alignas(64) std::array< detail::aligned< thread_reservation >, N > reservations;
-        alignas(64) std::array < detail::aligned< std::atomic< uint64_t > >, N > thread_ids;
-    };
-    
-    using thread = thread_manager<>;
-
-    template< typename T, typename ThreadManager = thread, typename Allocator = std::allocator< T > > class hazard_era_allocator
-    {
-        static const int freq = 1024;
-        static_assert(freq % 2 == 0);
-
-        // TODO: the alignas(64) is a workaround for a crash due to 
-        // hazard_allocator<T>::hazard_buffer having different alignments based on T's alignments
-        // This is caused by treating all hazard_allocator<T>s as the same and reinterpret_casting
-        // between them
-        struct alignas(64) hazard_buffer
-        {
-            template< typename... Args > hazard_buffer(uint64_t era, Args&&... args)
-                : value{std::forward< Args >(args)...}
-                , allocated(era)
-                , retired(-1)
-            {}
-
             uint64_t allocated;
             uint64_t retired;
-            T value;
         };
+
+        // deleter is a static function with proper allocator type, so from any hazard_era_allocator<*>
+        // 'correct' deallocation code is invoked on correctly aligned type to deallocate.
+        // deleter usage for data in shared memory is problematic:
+        //  1) obviously this would work only in same languages sharing the same destruction code. deleter
+        //      would have to be replaced by type and the function address resolved for each process.
+        //  2) node-based stacks and queues use destructor to invoke optional<T> destructor, yet if T is
+        //      trivially destructible, there is nothing to invoke.
+
+        using deleter = void (*)(hazard_buffer_header*);
 
         struct thread_data
         {
@@ -140,136 +46,68 @@ namespace containers::detail
             uint64_t retired;
 
             // TODO: retire list needs to be passed to someone upon thread exit
-            std::vector< hazard_buffer* > retired_buffers;
-            
+            std::vector< std::pair< hazard_buffer_header*, deleter > > retired_buffers;
+
             void clear()
             {
                 allocated = retired = 0;
             }
         };
-
-        alignas(64) std::array< detail::aligned< thread_data >, ThreadManager::max_threads > thread_;
-
-        using allocator_type = typename std::allocator_traits< Allocator >::template rebind_alloc< hazard_buffer >;
-        using allocator_traits_type = std::allocator_traits< allocator_type >;
-
-        allocator_type allocator_;
-        ThreadManager& thread_manager_;
-
-    public:
-        template< typename U > struct rebind
-        {
-            using other = hazard_era_allocator< U, ThreadManager, typename std::allocator_traits< Allocator >::template rebind_alloc< U > >;
-        };
         
-        hazard_era_allocator(ThreadManager& thread_manager = ThreadManager::instance())
-            : thread_manager_(thread_manager)
-        {}
+        alignas(64) std::array< detail::aligned< thread_data >, ThreadManager::max_threads > thread;
 
-        auto guard() { return thread_manager_.guard(); }
-
-        static hazard_era_allocator< T, ThreadManager, Allocator >& instance()
+        struct thread_reservation
         {
-            static hazard_era_allocator< T, ThreadManager, Allocator > instance;
+            std::atomic< uint64_t > min_era;
+            std::atomic< uint64_t > max_era;
+        };
+
+        alignas(64) std::atomic< uint64_t > era = 1;
+        alignas(64) std::array< detail::aligned< thread_reservation >, ThreadManager::max_threads > reservations;
+
+        class thread_guard
+        {
+        public:
+            ~thread_guard() { hazard_era_allocator_base< ThreadManager >::instance().clear(); }
+        };
+
+        static hazard_era_allocator_base< ThreadManager >& instance()
+        {
+            static hazard_era_allocator_base< ThreadManager > instance;
             return instance;
         }
 
-        template< typename... Args > T* allocate(Args&&... args)
-        {
-            auto buffer = allocator_traits_type::allocate(allocator_, 1);
-            allocator_traits_type::construct(allocator_, buffer,
-                thread_manager_.era.load(std::memory_order_acquire), std::forward< Args >(args)...);
-
-            if ((thread_[thread_id()].allocated++ & (freq - 1)) == 0)
-                thread_manager_.era.fetch_add(1, std::memory_order_release);
-
-            return &buffer->value;
-        }
-
-        T* protect(std::atomic< T* >& value, std::memory_order order = std::memory_order_seq_cst)
-        {
-            uint64_t max_era = thread_manager_.reservations[thread_id()].max_era.load(std::memory_order_relaxed);
-            while (true)
-            {
-                auto* ret = value.load(order);
-                uint64_t era = thread_manager_.era.load(std::memory_order_acquire);
-                if (max_era == era) return ret;
-                if (max_era == 0)
-                    thread_manager_.reservations[thread_id()].min_era.store(era, std::memory_order_release);
-                thread_manager_.reservations[thread_id()].max_era.store(era, std::memory_order_release);
-                max_era = era;
-            }
-        }
-
-        void retire(T* ptr)
-        {
-            auto buffer = hazard_buffer_cast(ptr);
-            buffer->retired = thread_manager_.era.load(std::memory_order_acquire);
-            thread_[thread_id()].retired_buffers.push_back(buffer);
-
-            if ((thread_[thread_id()].retired++ & (freq - 1)) == 0)
-            {
-                thread_manager_.era.fetch_add(1, std::memory_order_release);
-                cleanup();
-            }
-        }
-
-        void deallocate(T* ptr)
-        {
-            auto buffer = hazard_buffer_cast(ptr);
-            allocator_traits_type::destroy(allocator_, buffer);
-            allocator_traits_type::deallocate(allocator_, buffer, 1);
-        }
+        thread_guard guard() { return thread_guard(); }
 
         size_t thread_id()
         {
-            // Register thread first, dtor second, so dtor runs before thread gets unregistered
-            // TODO: not sure how valid 'this' will be when last thread will get destroyed...
-
-            static thread_local size_t id = thread_manager_.id();
-            static thread_local struct thread_destructor
+            struct thread_destructor
             {
-                thread_destructor(hazard_era_allocator< T, ThreadManager, Allocator >& allocator)
-                    : allocator_(allocator)
-                {}
-
                 ~thread_destructor()
                 {
                     // Clean thread's thread-local data
-                    allocator_.thread_[allocator_.thread_manager_.id()].clear();
+                    instance().thread[ThreadManager::instance().id()].clear();
 
                     // Clean threads's era reservations
-                    allocator_.thread_manager_.clear();
+                    instance().clear();
                 }
+            };
 
-                hazard_era_allocator< T, ThreadManager, Allocator >& allocator_;
-            } dtor(*this);
+            // Register thread first, dtor second, so dtor runs before thread gets unregistered
+            // TODO: not sure how valid 'this' will be when last thread will get destroyed...
+
+            static thread_local size_t id = ThreadManager::instance().id();
+            static thread_local thread_destructor dtor;
+
             return id;
         }
 
-    private:
-        void cleanup()
-        {
-            auto& buffers = thread_[thread_id()].retired_buffers;
-            buffers.erase(std::remove_if(buffers.begin(), buffers.end(), [this](hazard_buffer* buffer)
-            {
-                if (can_deallocate(buffer))
-                {
-                    allocator_traits_type::destroy(allocator_, buffer);
-                    allocator_traits_type::deallocate(allocator_, buffer, 1);
-                    return true;
-                }
-
-                return false;
-            }), buffers.end());
-        }
-
-        bool can_deallocate(hazard_buffer* buffer)
+        bool can_deallocate(hazard_buffer_header* buffer)
         {
             for (size_t tid = 0; tid < ThreadManager::max_threads; ++tid)
             {
-                auto min_era = thread_manager_.reservations[tid].min_era.load(std::memory_order_acquire);
-                auto max_era = thread_manager_.reservations[tid].max_era.load(std::memory_order_acquire);
+                auto min_era = reservations[tid].min_era.load(std::memory_order_acquire);
+                auto max_era = reservations[tid].max_era.load(std::memory_order_acquire);
 
                 if (min_era <= buffer->allocated && buffer->allocated <= max_era)
                     return false;
@@ -282,9 +120,138 @@ namespace containers::detail
             return true;
         }
 
-        hazard_buffer* hazard_buffer_cast(T* ptr)
+        void cleanup()
+        {
+            auto& buffers = thread[thread_id()].retired_buffers;
+            buffers.erase(std::remove_if(buffers.begin(), buffers.end(), [this](const std::pair< hazard_buffer_header*, deleter >& p)
+            {
+                if (can_deallocate(p.first))
+                {
+                    p.second(p.first);
+                    return true;
+                }
+
+            return false;
+            }), buffers.end());
+        }
+
+        void clear()
+        {
+            size_t tid = thread_id();
+            reservations[tid].min_era.store(0, std::memory_order_relaxed);
+            reservations[tid].max_era.store(0, std::memory_order_relaxed);
+        }
+    };
+
+    template< typename T, typename ThreadManager = thread, typename Allocator = std::allocator< T > > class hazard_era_allocator
+    {
+        template< typename U, typename ThreadManagerU, typename AllocatorU > friend class hazard_era_allocator;
+
+        static_assert(std::is_empty_v< Allocator >);
+
+        static const int freq = 1024;
+        static_assert(freq % 2 == 0);
+
+        using hazard_buffer_header = typename hazard_era_allocator_base< ThreadManager >::hazard_buffer_header;
+
+        struct hazard_buffer
+        {
+            template< typename... Args > hazard_buffer(uint64_t era, Args&&... args)
+                : header{ era, static_cast<uint64_t>(-1) }
+                , value{ std::forward< Args >(args)... }
+            {}
+
+            hazard_buffer_header header;
+            T value;
+        };
+
+        using allocator_type = typename std::allocator_traits< Allocator >::template rebind_alloc< hazard_buffer >;
+        using allocator_traits_type = std::allocator_traits< allocator_type >;
+
+    public:
+        template< typename U > struct rebind
+        {
+            using other = hazard_era_allocator< U, ThreadManager, typename std::allocator_traits< Allocator >::template rebind_alloc< U > >;
+        };
+        
+        hazard_era_allocator() {}
+        template< typename U, typename AllocatorT > hazard_era_allocator(hazard_era_allocator< U, ThreadManager, AllocatorT >&) {}
+
+        auto guard() { return base().guard(); }
+        auto thread_id() { return base().thread_id(); }
+
+        template< typename... Args > T* allocate(Args&&... args)
+        {
+            allocator_type allocator;
+            auto buffer = allocator_traits_type::allocate(allocator, 1);
+            allocator_traits_type::construct(allocator, buffer,
+                base().era.load(std::memory_order_acquire), std::forward< Args >(args)...);
+
+            if ((base().thread[thread_id()].allocated++ & (freq - 1)) == 0)
+                base().era.fetch_add(1, std::memory_order_release);
+
+            return &buffer->value;
+        }
+
+        T* protect(std::atomic< T* >& value, std::memory_order order = std::memory_order_seq_cst)
+        {
+            uint64_t max_era = base().reservations[thread_id()].max_era.load(std::memory_order_relaxed);
+            while (true)
+            {
+                auto* ret = value.load(order);
+                uint64_t era = base().era.load(std::memory_order_acquire);
+                if (max_era == era) return ret;
+                if (max_era == 0)
+                    base().reservations[thread_id()].min_era.store(era, std::memory_order_release);
+                base().reservations[thread_id()].max_era.store(era, std::memory_order_release);
+                max_era = era;
+            }
+        }
+
+        void retire(T* ptr)
+        {
+            auto buffer = hazard_buffer_cast(ptr);
+            buffer->header.retired = base().era.load(std::memory_order_acquire);
+            base().thread[thread_id()].retired_buffers.emplace_back(&buffer->header, &hazard_buffer_retire);
+
+            if ((base().thread[thread_id()].retired++ & (freq - 1)) == 0)
+            {
+                base().era.fetch_add(1, std::memory_order_release);
+                base().cleanup();
+            }
+        }
+
+        void deallocate(T* ptr)
+        {
+            hazard_buffer_deallocate(hazard_buffer_cast(ptr));
+        }
+
+    private:
+        hazard_era_allocator_base< ThreadManager >& base()
+        {
+            return hazard_era_allocator_base< ThreadManager >::instance();
+        }
+        
+        static void hazard_buffer_retire(hazard_buffer_header* ptr)
+        {
+            hazard_buffer_deallocate(hazard_buffer_cast(ptr));
+        }
+
+        static void hazard_buffer_deallocate(hazard_buffer* buffer)
+        {
+            allocator_type allocator;
+            allocator_traits_type::destroy(allocator, buffer);
+            allocator_traits_type::deallocate(allocator, buffer, 1);
+        }
+
+        static hazard_buffer* hazard_buffer_cast(T* ptr)
         {
             return reinterpret_cast< hazard_buffer* >(reinterpret_cast<uintptr_t>(ptr) - offsetof(hazard_buffer, value));
+        }
+
+        static hazard_buffer* hazard_buffer_cast(hazard_buffer_header* ptr)
+        {
+            return reinterpret_cast< hazard_buffer* >(reinterpret_cast<uintptr_t>(ptr) - offsetof(hazard_buffer, header));
         }
     };
 }

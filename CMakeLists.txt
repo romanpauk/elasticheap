@@ -51,6 +51,7 @@ target_sources(containers INTERFACE
     include/containers/lockfree/detail/exponential_backoff.h
     include/containers/lockfree/detail/hazard_era_allocator.h
     include/containers/lockfree/detail/optional.h
+    include/containers/lockfree/detail/thread_manager.h
     README.md
 )
 
