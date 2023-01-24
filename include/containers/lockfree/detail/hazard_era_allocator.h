@@ -191,26 +191,28 @@ namespace containers::detail
 
         T* protect(std::atomic< T* >& value, std::memory_order order = std::memory_order_seq_cst)
         {
-            uint64_t max_era = base().reservations[thread_id()].max_era.load(std::memory_order_relaxed);
+            auto tid = thread_id();
+            uint64_t max_era = base().reservations[tid].max_era.load(std::memory_order_relaxed);
             while (true)
             {
                 auto* ret = value.load(order);
                 uint64_t era = base().era.load(std::memory_order_acquire);
                 if (max_era == era) return ret;
                 if (max_era == 0)
-                    base().reservations[thread_id()].min_era.store(era, std::memory_order_release);
-                base().reservations[thread_id()].max_era.store(era, std::memory_order_release);
+                    base().reservations[tid].min_era.store(era, std::memory_order_release);
+                base().reservations[tid].max_era.store(era, std::memory_order_release);
                 max_era = era;
             }
         }
 
         void retire(T* ptr)
         {
+            auto tid = thread_id();
             auto buffer = hazard_buffer_cast(ptr);
             buffer->header.retired = base().era.load(std::memory_order_acquire);
-            base().thread[thread_id()].retired_buffers.emplace_back(&buffer->header, &hazard_buffer_retire);
+            base().thread[tid].retired_buffers.emplace_back(&buffer->header, &hazard_buffer_retire);
 
-            if ((base().thread[thread_id()].retired++ & (freq - 1)) == 0)
+            if ((base().thread[tid].retired++ & (freq - 1)) == 0)
             {
                 base().era.fetch_add(1, std::memory_order_release);
                 base().cleanup();

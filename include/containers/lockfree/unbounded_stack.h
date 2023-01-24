@@ -156,31 +156,25 @@ namespace containers
 
         template< typename... Args > void emplace(Args&&... args)
         {
-            Backoff backoff;
             auto guard = allocator_.guard();
             while (true)
             {
-                auto head = allocator_.protect(head_);
-                auto top = head->stack.top_.load();
+                auto head = allocator_.protect(head_, std::memory_order_acquire);
                 if (head->stack.emplace(std::forward< Args >(args)...))
                     return;
 
+                auto top = head->stack.top_.load(std::memory_order_relaxed);
                 if (top.index == -1)
                 {
-                    if(head_.compare_exchange_strong(head, head->next))
-                    {
+                    if(head_.compare_exchange_strong(head, head->next, std::memory_order_release))
                         allocator_.retire(head);
-                        continue;
-                    }
                 }
                 else
                 {
                     auto new_head = allocator_.allocate(head);
-                    if (!head_.compare_exchange_strong(new_head->next, new_head))
+                    if (!head_.compare_exchange_strong(new_head->next, new_head, std::memory_order_release))
                         allocator_.deallocate(new_head);
                 }
-
-                backoff();
             }
         }
 
@@ -189,31 +183,33 @@ namespace containers
 
         bool pop(T& value)
         {
-            Backoff backoff;
             auto guard = allocator_.guard();
             while (true)
             {
-                auto head = allocator_.protect(head_);
+                auto head = allocator_.protect(head_, std::memory_order_acquire);
                 if (!head)
                     return false;
 
-                auto top = head->stack.top_.load();
                 if (head->stack.pop(value))
                     return true;
 
                 if (!head->next)
                     return false;
 
-                if (top.index == -1 || head->stack.top_.compare_exchange_strong(top, { (uint32_t)-1, top.counter + 1, T{} }))
+                auto top = head->stack.top_.load(std::memory_order_relaxed);
+                if (top.index == 0)
                 {
-                    if (head_.compare_exchange_strong(head, head->next))
+                    if (head->stack.top_.compare_exchange_strong(top, { (uint32_t)-1, top.counter + 1, T{} }))
                     {
-                        allocator_.retire(head);
-                        continue;
+                        if (head_.compare_exchange_strong(head, head->next, std::memory_order_release))
+                            allocator_.retire(head);
                     }
                 }
-
-                backoff();
+                else if (top.index == -1)
+                {
+                    if (head_.compare_exchange_strong(head, head->next, std::memory_order_release))
+                        allocator_.retire(head);
+                }
             }
         }
 
