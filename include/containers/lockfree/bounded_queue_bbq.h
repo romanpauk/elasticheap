@@ -104,7 +104,7 @@ namespace containers
 
         template< typename... Args > void commit_entry(Entry entry, Args&&... args)
         {
-            new(&entry.block->entries[entry.offset]) T{std::forward< Args >(args)...};
+            entry.block->entries[entry.offset].emplace(std::forward< Args >(args)...);
             entry.block->committed.fetch_add(1);
         }
 
