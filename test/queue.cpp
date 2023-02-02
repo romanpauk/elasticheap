@@ -15,8 +15,9 @@ const int queue_size = 128; // TODO: the calculation in bbq queue needs at least
 
 using queue_types = ::testing::Types<
     containers::bounded_queue< int, queue_size >
-    , containers::unbounded_queue< int >
     , containers::bounded_queue_bbq< int, queue_size * 2 > // It is not possible to push into block that has unconsumed data
+    , containers::unbounded_queue< int >
+    , containers::unbounded_blocked_queue< int > // It is not possible to push into block that has unconsumed data
 >;
 
 template <typename T> struct queue_test : public testing::Test {};
@@ -28,6 +29,7 @@ TYPED_TEST(queue_test, basic_operations)
 
     container c;
 
+    ASSERT_TRUE(c.empty());
     for (size_t i = 1; i <= queue_size; ++i)
     {
         for(size_t j = 0; j < i; ++j)
@@ -40,6 +42,8 @@ TYPED_TEST(queue_test, basic_operations)
             {
                 c.push(j);
             }
+
+            ASSERT_TRUE(!c.empty());
         }
 
         for (size_t j = 0; j < i; ++j)
@@ -48,6 +52,8 @@ TYPED_TEST(queue_test, basic_operations)
             ASSERT_TRUE(c.pop(v));
             ASSERT_EQ(v, j);
         }
+
+        ASSERT_TRUE(c.empty());
     }
 }
 

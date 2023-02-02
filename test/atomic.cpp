@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 
-#include <containers/lockfree/atomic16.h>
+#include <containers/lockfree/atomic.h>
 
 #include <gtest/gtest.h>
 
@@ -29,4 +29,13 @@ TEST(atomic16_test, basic_operations)
         data expected{ 1, 1 };
         ASSERT_TRUE(a.compare_exchange_strong(expected, data{ 1, 3 }));
     }
+}
+
+TEST(atomic_fetch_max_explicit, test)
+{
+    std::atomic< int > a(1);
+    ASSERT_EQ(containers::atomic_fetch_max_explicit(&a, 1), 1);
+    ASSERT_EQ(a.load(), 1);
+    ASSERT_EQ(containers::atomic_fetch_max_explicit(&a, 2), 1);
+    ASSERT_EQ(a.load(), 2);
 }

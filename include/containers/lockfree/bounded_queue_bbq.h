@@ -9,6 +9,7 @@
 
 #include <containers/lockfree/detail/exponential_backoff.h>
 #include <containers/lockfree/detail/optional.h>
+#include <containers/lockfree/atomic.h>
 
 #include <atomic>
 #include <memory>
@@ -82,11 +83,12 @@ namespace containers
         static_assert(BlockSize % 2 == 0);
         static_assert(Size / BlockSize > 1);
 
-        alignas(64) std::array< Block, Size / BlockSize > blocks_;
+        // mutable is needed to support empty() as that can require moving to next block
+        alignas(64) mutable std::array< Block, Size / BlockSize > blocks_;
         alignas(64) std::atomic< uint64_t > phead_{};
-        alignas(64) std::atomic< uint64_t > chead_{};
+        alignas(64) mutable std::atomic< uint64_t > chead_{};
 
-        std::pair< Cursor, Block* > get_block(std::atomic< uint64_t >& head)
+        std::pair< Cursor, Block* > get_block(std::atomic< uint64_t >& head) const
         {
             auto value = Cursor(head.load());
             return { value, &blocks_[value.offset & (blocks_.size() - 1)] };
@@ -188,7 +190,7 @@ namespace containers
             return status::success;
         }
 
-        bool advance_chead(Cursor head, uint32_t version)
+        bool advance_chead(Cursor head, uint32_t version) const
         {
             auto& next_block = blocks_[(head.offset + 1) & (blocks_.size() - 1)];
             auto committed = Cursor(next_block.committed.load());
@@ -207,18 +209,6 @@ namespace containers
 
             atomic_fetch_max_explicit(&chead_, (uint64_t)Cursor(head.offset + 1, head.version));
             return true;
-        }
-
-        // Atomic minimum/maximum - https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2021/p0493r3.pdf
-        template < typename U >
-        U atomic_fetch_max_explicit(std::atomic<U>* pv, typename std::atomic<U>::value_type v, std::memory_order m = std::memory_order_seq_cst) noexcept
-        {
-            auto t = pv->load(m);
-            while (std::max(v, t) != t) {
-                if (pv->compare_exchange_weak(t, v, m, m))
-                    break;
-            }
-            return t;
         }
 
     public:
@@ -311,5 +301,26 @@ namespace containers
         }
 
         static constexpr size_t capacity() { return Size; }
+
+        bool empty() const
+        {
+            while (true)
+            {
+                auto [head, block] = get_block(chead_);
+                auto reserved = Cursor(block->reserved.load());
+                if (reserved.offset < BlockSize)
+                {
+                    auto committed = Cursor(block->committed.load());
+                    if (committed.offset == reserved.offset)
+                        return true;
+
+                    return false;
+                }
+                else if (!advance_chead(head, reserved.version))
+                {
+                    return false;
+                }
+            }
+        }
     };
 }

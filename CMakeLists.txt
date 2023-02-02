@@ -40,9 +40,10 @@ add_library(containers INTERFACE)
 target_include_directories(containers INTERFACE include)
 
 target_sources(containers INTERFACE
-    include/containers/lockfree/atomic16.h
+    include/containers/lockfree/atomic.h
     include/containers/lockfree/bounded_queue.h
     include/containers/lockfree/bounded_queue_bbq.h
+    include/containers/lockfree/bounded_queue_bbq_block.h
     include/containers/lockfree/bounded_stack.h
     include/containers/lockfree/unbounded_queue.h
     include/containers/lockfree/unbounded_stack.h
@@ -50,6 +51,7 @@ target_sources(containers INTERFACE
     include/containers/lockfree/detail/atomic16_win32.h
     include/containers/lockfree/detail/exponential_backoff.h
     include/containers/lockfree/detail/hazard_era_allocator.h
+    include/containers/lockfree/detail/leaking_allocator.h
     include/containers/lockfree/detail/optional.h
     include/containers/lockfree/detail/thread_manager.h
     README.md

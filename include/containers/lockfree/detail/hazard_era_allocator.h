@@ -189,7 +189,7 @@ namespace containers::detail
             return &buffer->value;
         }
 
-        T* protect(std::atomic< T* >& value, std::memory_order order = std::memory_order_seq_cst)
+        T* protect(const std::atomic< T* >& value, std::memory_order order = std::memory_order_seq_cst)
         {
             auto tid = thread_id();
             uint64_t max_era = base().reservations[tid].max_era.load(std::memory_order_relaxed);

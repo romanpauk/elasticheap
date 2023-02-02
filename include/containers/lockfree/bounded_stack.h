@@ -9,7 +9,7 @@
 
 #include <containers/lockfree/detail/exponential_backoff.h>
 #include <containers/lockfree/detail/padding.h>
-#include <containers/lockfree/atomic16.h>
+#include <containers/lockfree/atomic.h>
 
 #include <atomic>
 #include <memory>

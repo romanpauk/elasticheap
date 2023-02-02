@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 
-#include <containers/lockfree/atomic16.h>
+#include <containers/lockfree/atomic.h>
 
 #include <benchmark/benchmark.h>
 #include <thread>
