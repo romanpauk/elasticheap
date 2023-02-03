@@ -90,7 +90,7 @@ namespace containers
             }
         }
 
-        bool empty() const { return head_.load(); }
+        bool empty() const { return head_.load() == nullptr; }
 
         void clear()
         {
@@ -136,7 +136,7 @@ namespace containers
         };
 
         using allocator_type = typename Allocator::template rebind< node >::other;
-        allocator_type allocator_;
+        mutable allocator_type allocator_;
 
         alignas(64) std::atomic< node* > head_{};
 
@@ -213,15 +213,13 @@ namespace containers
             }
         }
 
-        /* TODO:
         bool empty() const
         {
             auto guard = allocator_.guard();
             auto head = allocator_.protect(head_, std::memory_order_acquire);
             return head->stack.empty();
         }
-        */
-
+        
         void clear()
         {
             Backoff backoff;

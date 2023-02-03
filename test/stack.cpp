@@ -25,10 +25,9 @@ TYPED_TEST(stack_test, basic_operations)
 {
     using container = TypeParam;
     container c;
-    
     for (size_t i = 1; i <= stack_size; ++i)
     {
-        
+        ASSERT_TRUE(c.empty());
 
         for (size_t j = 0; j < i; ++j)
         {
@@ -40,6 +39,8 @@ TYPED_TEST(stack_test, basic_operations)
             {
                 c.push(j);
             }
+
+            ASSERT_FALSE(c.empty());
         }
 
         for (int j = i; j > 0; --j)
@@ -48,5 +49,7 @@ TYPED_TEST(stack_test, basic_operations)
             ASSERT_TRUE(c.pop(v)) << j;
             ASSERT_EQ(v, j - 1);
         }
+
+        ASSERT_TRUE(c.empty());
     }
 }

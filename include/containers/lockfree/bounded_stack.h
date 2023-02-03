@@ -76,8 +76,10 @@ namespace containers
                 // push and pop have no effect, we can wait with finish till there will be someone
                 // pushing to empty stack or popping from non empty stack.
 
-                if (Mark && top.index == Mark)
-                    return false;
+                if constexpr (Mark)
+                    if(top.index == Mark)
+                        return false;
+
                 if (top.index == array_.size() - 1)
                     return false;
 
@@ -101,10 +103,12 @@ namespace containers
             {
                 auto top = top_.load();
 
-                if (Mark && top.index == Mark)
-                    return false;
+                if constexpr (Mark)
+                    if(top.index == Mark)
+                        return false;
+                
                 if (top.index == 0)
-                    return false;              
+                    return false;
 
                 finish(top);
 
@@ -121,7 +125,19 @@ namespace containers
 
         static constexpr size_t capacity() { return Size - 1; }
 
-        // TODO: bool empty() const;
+        bool empty() const
+        {
+            auto top = top_.load();
+
+            if constexpr (Mark)
+                if(top.index == Mark)
+                    return true;
+
+            if (top.index == 0)
+                return true;
+
+           return false;
+        }
 
     private:
         void finish(top_node& n)
@@ -149,6 +165,6 @@ namespace containers
         using base_type::push;
         using base_type::pop;
         using base_type::capacity;
-        // TODO: using base_type::empty;
+        using base_type::empty;
     };
 }

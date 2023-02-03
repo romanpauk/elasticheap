@@ -44,8 +44,14 @@ public:
         }
     }
 
+    bool empty() const
+    {
+        auto guard = std::lock_guard(mutex_);
+        return stack_.empty();
+    }
+
 private:
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::stack< T > stack_;
 };
 
@@ -103,19 +109,35 @@ template< typename Stack > static void stack_pop(benchmark::State& state)
     state.SetBytesProcessed(state.iterations());
 }
 
+template< typename Stack > static void stack_empty(benchmark::State& state)
+{
+    static Stack stack;
+    typename Stack::value_type value;
+    for (auto _ : state)
+    {
+        benchmark::DoNotOptimize(stack.empty());
+    }
+
+    state.SetBytesProcessed(state.iterations());
+}
+
 BENCHMARK_TEMPLATE(stack_push_pop, stl_stack<int>)->ThreadRange(1, max_threads)->UseRealTime();
 BENCHMARK_TEMPLATE(stack_push_pop_rand, stl_stack<int>)->ThreadRange(1, max_threads)->UseRealTime();
 BENCHMARK_TEMPLATE(stack_pop, stl_stack<int>)->ThreadRange(1, max_threads)->UseRealTime();
+BENCHMARK_TEMPLATE(stack_empty, stl_stack<int>)->ThreadRange(1, max_threads)->UseRealTime();
 
 BENCHMARK_TEMPLATE(stack_push_pop,containers::unbounded_stack<int>)->ThreadRange(1, max_threads)->UseRealTime();
 BENCHMARK_TEMPLATE(stack_push_pop_rand, containers::unbounded_stack<int>)->ThreadRange(1, max_threads)->UseRealTime();
 BENCHMARK_TEMPLATE(stack_pop, containers::unbounded_stack<int>)->ThreadRange(1, max_threads)->UseRealTime();
+BENCHMARK_TEMPLATE(stack_empty, containers::unbounded_stack<int>)->ThreadRange(1, max_threads)->UseRealTime();
 
 BENCHMARK_TEMPLATE(stack_push_pop, containers::bounded_stack<int, 1024>)->ThreadRange(1, max_threads)->UseRealTime();
 BENCHMARK_TEMPLATE(stack_push_pop_rand, containers::bounded_stack<int, 1024>)->ThreadRange(1, max_threads)->UseRealTime();
 BENCHMARK_TEMPLATE(stack_push, containers::bounded_stack<int, 1024>)->Iterations(iterations)->UseRealTime();
 BENCHMARK_TEMPLATE(stack_pop, containers::bounded_stack<int, 1024>)->ThreadRange(1, max_threads)->UseRealTime();
+BENCHMARK_TEMPLATE(stack_empty, containers::bounded_stack<int, 1024>)->ThreadRange(1, max_threads)->UseRealTime();
 
 BENCHMARK_TEMPLATE(stack_push_pop, containers::unbounded_blocked_stack<int>)->ThreadRange(1, max_threads)->UseRealTime();
 BENCHMARK_TEMPLATE(stack_push_pop_rand, containers::unbounded_blocked_stack<int>)->ThreadRange(1, max_threads)->UseRealTime();
 BENCHMARK_TEMPLATE(stack_pop, containers::unbounded_blocked_stack<int>)->ThreadRange(1, max_threads)->UseRealTime();
+BENCHMARK_TEMPLATE(stack_empty, containers::unbounded_blocked_stack<int>)->ThreadRange(1, max_threads)->UseRealTime();

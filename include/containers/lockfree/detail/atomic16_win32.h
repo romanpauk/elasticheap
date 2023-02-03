@@ -27,7 +27,7 @@ namespace containers::detail
         static_assert(sizeof(T) == 16);
         alignas(16) T value_;
 
-        void fence(std::memory_order mo)
+        static void fence(std::memory_order mo)
         {
             switch (mo)
             {
@@ -45,7 +45,7 @@ namespace containers::detail
     public:
         using value_type = T;
 
-        T load(std::memory_order mo = std::memory_order_seq_cst)
+        T load(std::memory_order mo = std::memory_order_seq_cst) const
         {
             fence(mo);
             __m128i value = _mm_load_si128((__m128i*)&value_);

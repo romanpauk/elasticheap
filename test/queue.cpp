@@ -28,10 +28,10 @@ TYPED_TEST(queue_test, basic_operations)
     using container = TypeParam;
 
     container c;
-
-    ASSERT_TRUE(c.empty());
     for (size_t i = 1; i <= queue_size; ++i)
     {
+        ASSERT_TRUE(c.empty());
+
         for(size_t j = 0; j < i; ++j)
         {
             if constexpr (std::is_same_v< decltype(c.push(j)), bool >)
@@ -43,7 +43,7 @@ TYPED_TEST(queue_test, basic_operations)
                 c.push(j);
             }
 
-            ASSERT_TRUE(!c.empty());
+            ASSERT_FALSE(c.empty());
         }
 
         for (size_t j = 0; j < i; ++j)
