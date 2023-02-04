@@ -63,13 +63,13 @@ TEST(bounded_queue_bbq_test, nondefault_entry)
 
     struct nondefault
     {
-        nondefault(size_t* counter)
+        nondefault(size_t* counter) noexcept(true)
             : counter_(counter)
         {}
 
         nondefault(const nondefault&) = delete;
 
-        nondefault(nondefault&& other)
+        nondefault(nondefault&& other) noexcept(true)
             : counter_(other.counter_)
         {
             other.counter_ = 0;
@@ -93,7 +93,7 @@ TEST(bounded_queue_bbq_test, nondefault_entry)
     {
         containers::bounded_queue_bbq< nondefault, queue_size * 2 > queue;
         queue.emplace(&dtors);
-        queue.emplace(&dtors);
+        queue.emplace(nondefault(&dtors));
     }
 
     ASSERT_EQ(dtors, 2);
@@ -112,4 +112,30 @@ TEST(bounded_queue_bbq_test, nondefault_entry)
         ASSERT_EQ(dtors, 1); // One element left in queue
     }
     ASSERT_EQ(dtors, 2); // ~tmp
+}
+
+TEST(bounded_queue_bbq_test, exceptions)
+{
+    struct throwing_type
+    {
+        struct error {};
+
+        throwing_type(int val, bool thr): value(val) { if (thr) throw error(); };
+        int value;
+    };
+
+    throwing_type t(0, false);
+
+    containers::bounded_queue_bbq< throwing_type, queue_size * 2 > queue;
+    ASSERT_THROW(queue.emplace(0, true), throwing_type::error);
+
+    // TODO: the value is in the queue, it just is not valid. But empty() can't know.
+    // pop() knows. 
+    ASSERT_FALSE(queue.empty()); 
+    ASSERT_FALSE(queue.pop(t));
+    ASSERT_TRUE(queue.empty());
+
+    ASSERT_NO_THROW(queue.emplace(1, false));
+    ASSERT_TRUE(queue.pop(t));
+    ASSERT_EQ(t.value, 1);
 }

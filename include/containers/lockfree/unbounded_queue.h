@@ -10,7 +10,7 @@
 #include <containers/lockfree/detail/exponential_backoff.h>
 #include <containers/lockfree/detail/hazard_era_allocator.h>
 #include <containers/lockfree/detail/optional.h>
-#include <containers/lockfree/bounded_queue_bbq_block.h>
+#include <containers/lockfree/bounded_queue_bbq.h>
 
 #include <atomic>
 #include <memory>

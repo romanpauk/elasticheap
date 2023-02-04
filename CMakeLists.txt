@@ -43,7 +43,6 @@ target_sources(containers INTERFACE
     include/containers/lockfree/atomic.h
     include/containers/lockfree/bounded_queue.h
     include/containers/lockfree/bounded_queue_bbq.h
-    include/containers/lockfree/bounded_queue_bbq_block.h
     include/containers/lockfree/bounded_stack.h
     include/containers/lockfree/unbounded_queue.h
     include/containers/lockfree/unbounded_stack.h
