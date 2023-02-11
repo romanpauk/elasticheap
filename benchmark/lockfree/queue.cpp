@@ -11,7 +11,7 @@
 
 #include <benchmark/benchmark.h>
 #include <thread>
-#include <list>
+#include <queue>
 #include <mutex>
 #include <random>
 
@@ -25,7 +25,7 @@ public:
     void push(T value)
     {
         auto guard = std::lock_guard(mutex_);
-        queue_.push_back(value);
+        queue_.push(value);
     }
 
     bool pop(T& value)
@@ -34,7 +34,7 @@ public:
         if (!queue_.empty())
         {
             value = std::move(queue_.front());
-            queue_.pop_front();
+            queue_.pop();
             return true;
         }
         else
@@ -51,7 +51,7 @@ public:
 
 private:
     mutable std::mutex mutex_;
-    std::list< T > queue_;
+    std::queue< T > queue_;
 };
 
 template< typename Queue > static void queue_push_pop(benchmark::State& state)
@@ -132,4 +132,13 @@ BENCHMARK_TEMPLATE(queue_push_pop, containers::bounded_queue_bbq<int, 1024 * 64>
 BENCHMARK_TEMPLATE(queue_push_pop_rand, containers::bounded_queue_bbq<int, 1024 * 64>)->ThreadRange(1, max_threads)->UseRealTime();
 BENCHMARK_TEMPLATE(queue_pop, containers::bounded_queue_bbq<int, 1024 * 64>)->ThreadRange(1, max_threads)->UseRealTime();
 BENCHMARK_TEMPLATE(queue_empty, containers::bounded_queue_bbq<int, 1024 * 64>)->ThreadRange(1, max_threads)->UseRealTime();
+
+BENCHMARK_TEMPLATE(queue_push_pop, stl_queue<std::string>)->ThreadRange(1, max_threads)->UseRealTime();
+BENCHMARK_TEMPLATE(queue_push_pop_rand, stl_queue<std::string>)->ThreadRange(1, max_threads)->UseRealTime();
+
+BENCHMARK_TEMPLATE(queue_push_pop, containers::bounded_queue_bbq<std::string, 1024 * 64>)->ThreadRange(1, max_threads)->UseRealTime();
+BENCHMARK_TEMPLATE(queue_push_pop_rand, containers::bounded_queue_bbq<std::string, 1024 * 64>)->ThreadRange(1, max_threads)->UseRealTime();
+
+BENCHMARK_TEMPLATE(queue_push_pop, containers::unbounded_blocked_queue<std::string>)->ThreadRange(1, max_threads)->UseRealTime();
+BENCHMARK_TEMPLATE(queue_push_pop_rand, containers::unbounded_blocked_queue<std::string>)->ThreadRange(1, max_threads)->UseRealTime();
 

@@ -25,38 +25,17 @@ namespace containers
 
     constexpr size_t log2(size_t value) { return value < 2 ? 1 : 1 + log2(value / 2); }
 
-    template< typename T, bool IsNothrowType = std::is_trivial_v< T > > class bounded_queue_bbq_traits;
-
-    template< typename T > struct bounded_queue_bbq_traits<T, true>
-    {
-        using element_type = detail::optional< T >;
-        static constexpr bool is_nothrow() { return true; }
-        static constexpr bool is_valid(const element_type&) { return true; }
-    };
-
-    template< typename T > struct bounded_queue_bbq_traits<T, false>
-    {
-        using element_type = std::optional< T >;
-        static constexpr bool is_nothrow() { return false; }
-        static bool is_valid(const element_type& value) { return value.has_value(); }
-    };
-
     template<
         typename T,
-        size_t Size,
-        bool IsNoThrow
+        size_t Size
     > class bounded_queue_bbq_base
     {
     public:
-        using traits_type = bounded_queue_bbq_traits< T, IsNoThrow >;
-        using element_type = typename traits_type::element_type;
+        using element_type = typename detail::optional< T >;
 
         static_assert(Size % 2 == 0);
         static_assert(std::is_nothrow_destructible_v< T >);
-
-        // Sanity-check: make sure trivial types do not use code to support exceptions
-        static_assert(!std::is_trivial_v< T > || traits_type::is_nothrow());
-
+        
         enum class status
         {
             success,
@@ -119,6 +98,26 @@ namespace containers
         }
 
         static constexpr size_t capacity() { return Size; }
+
+        detail::optional< T >& thread_local_optional()
+        {
+            static thread_local detail::optional< T > value;
+            return value;
+        }
+
+        template< typename... Args > constexpr static bool is_thread_local_nothrow_constructible()
+        {
+            if constexpr (!std::is_nothrow_constructible_v< T, Args... >)
+            {
+                // Thread-local construction means the construction will be attempted outside the
+                // queue first and successfully constructed object will be moved to the queue.
+                // This way, queue metadata will always be right.
+                static_assert(std::is_nothrow_move_constructible_v< T >);
+                return true;
+            }
+            
+            return false;
+        }
     };
     
     // Single-use BBQ block that can be filled / depleted only once. The real queue
@@ -126,13 +125,11 @@ namespace containers
     template<
         typename T,
         size_t Size,
-        typename Backoff = detail::exponential_backoff<>,
-        bool IsNoThrow = std::is_trivial_v< T >
+        typename Backoff = detail::exponential_backoff<>
     > class bounded_queue_bbq_block
-        : bounded_queue_bbq_base< T, Size, IsNoThrow >
+        : bounded_queue_bbq_base< T, Size >
     {
-        using base_type = bounded_queue_bbq_base< T, Size, IsNoThrow >;
-        using traits_type = typename base_type::traits_type;
+        using base_type = bounded_queue_bbq_base< T, Size >;
         using cursor_type = typename base_type::cursor;
         using status_type = typename base_type::status;
         using block_type = typename base_type::block;
@@ -147,24 +144,38 @@ namespace containers
         
         block_type block_;
 
-        std::pair< status_type, entry > allocate_entry()
+        template< typename... Args > std::pair< status_type, entry > allocate_entry(Args&&... args)
         {
             if (cursor_type(block_.allocated.load()).offset >= Size)
                 return { status_type::block_done, {} };
+
+            if constexpr (this->is_thread_local_nothrow_constructible< Args... >())
+                this->thread_local_optional().emplace(std::forward< Args >(args)...);
+
             auto allocated = cursor_type(block_.allocated.fetch_add(1));
             if (allocated.offset >= Size)
+            {
+                if constexpr (this->is_thread_local_nothrow_constructible< Args... >())
+                    this->thread_local_optional().reset();
+
                 return { status_type::block_done, {} };
+            }
+                
             return { status_type::success, { allocated.offset, 0 } };
         }
 
         template< typename... Args > void commit_entry(entry entry, Args&&... args)
         {
-            // If the queue is instantiated as no-throw, make sure the operation does not throw
-            if constexpr (traits_type::is_nothrow())
-                static_assert(std::is_nothrow_constructible_v< T, Args... >);
-
             fetch_add_type add(block_.committed);
-            block_.entries[entry.offset].emplace(std::forward< Args >(args)...);
+            if constexpr (this->is_thread_local_nothrow_constructible< Args... >())
+            {
+                block_.entries[entry.offset].emplace(std::move(thread_local_optional().value()));
+                this->thread_local_optional().reset();
+            }
+            else
+            {
+                block_.entries[entry.offset].emplace(std::forward< Args >(args)...);
+            }
         }
 
         std::pair< status_type, entry > reserve_entry(Backoff& backoff)
@@ -198,30 +209,18 @@ namespace containers
             }
         }
 
-        bool consume_entry(entry entry, std::optional< T >& value)
+        void consume_entry(entry entry, std::optional< T >& value)
         {
             fetch_add_type add(block_.consumed);
-            if (traits_type::is_valid(block_.entries[entry.offset]))
-            {
-                reset_type reset(block_.entries[entry.offset]);
-                value.emplace(std::move(block_.entries[entry.offset].value()));
-                return true;
-            }
-
-            return false;
+            reset_type reset(block_.entries[entry.offset]);
+            value.emplace(std::move(block_.entries[entry.offset].value()));
         }
 
-        bool consume_entry(entry entry, T& value)
+        void consume_entry(entry entry, T& value)
         {
             fetch_add_type add(block_.consumed);
-            if (traits_type::is_valid(block_.entries[entry.offset]))
-            {
-                reset_type reset(block_.entries[entry.offset]);
-                value = std::move(block_.entries[entry.offset].value());
-                return true;
-            }
-
-            return false;
+            reset_type reset(block_.entries[entry.offset]);
+            value = std::move(block_.entries[entry.offset].value());
         }
 
     public:
@@ -245,7 +244,7 @@ namespace containers
             Backoff backoff;
             while (true)
             {
-                auto [status, entry] = allocate_entry();
+                auto [status, entry] = allocate_entry(std::forward< Args >(args)...);
                 switch (status)
                 {
                 case status_type::success:
@@ -273,9 +272,8 @@ namespace containers
                 switch (status)
                 {
                 case status_type::success:
-                    if (consume_entry(entry, result))
-                        return true;
-                    continue;
+                    consume_entry(entry, result);
+                    return true;
                 case status_type::fail: return false;
                 case status_type::busy: break;
                 case status_type::block_done: return false;
@@ -304,19 +302,17 @@ namespace containers
     template<
         typename T,
         size_t Size,
-        bool IsNoThrow = std::is_trivial_v< T >,
         size_t BlockSize = Size / (1 << (std::max(size_t(1), log2(Size) / 4) - 1)), // log(num of blocks) = max(1, log(size)/4)
         typename Backoff = detail::exponential_backoff<>
     > class bounded_queue_bbq
-        : bounded_queue_bbq_base< T, Size, IsNoThrow >
+        : bounded_queue_bbq_base< T, Size >
     {
         static_assert(BlockSize % 2 == 0);
         static_assert(Size / BlockSize > 1);
 
-        using base_type = bounded_queue_bbq_base< T, Size, IsNoThrow >;
+        using base_type = bounded_queue_bbq_base< T, Size >;
         using cursor_type = typename base_type::cursor;
         using status_type = typename base_type::status;
-        using traits_type = typename base_type::traits_type;
         using element_type = typename base_type::element_type;
         using block_type = typename base_type::block;
         using fetch_add_type = typename base_type::fetch_add;
@@ -343,24 +339,37 @@ namespace containers
             return { value, &blocks_[value.offset & (blocks_.size() - 1)] };
         }
 
-        std::pair< status_type, entry > allocate_entry(block_type* block)
+        template< typename... Args > std::pair< status_type, entry > allocate_entry(block_type* block, Args&&... args)
         {
             if (cursor_type(block->allocated.load()).offset >= BlockSize)
                 return { status_type::block_done, {} };
+
+            if constexpr (this->is_thread_local_nothrow_constructible< Args... >())
+                this->thread_local_optional().emplace(std::forward< Args >(args)...);
+                
             auto allocated = cursor_type(block->allocated.fetch_add(1));
             if (allocated.offset >= BlockSize)
+            {
+                if constexpr (this->is_thread_local_nothrow_constructible< Args... >())
+                    this->thread_local_optional().reset();
+                
                 return { status_type::block_done, {} };
+            }
             return { status_type::success, { block, allocated.offset, 0 } };
         }
 
         template< typename... Args > void commit_entry(entry entry, Args&&... args)
         {
-            // If the queue is instantiated as no-throw, make sure the operation does not throw
-            if constexpr(traits_type::is_nothrow())
-                static_assert(std::is_nothrow_constructible_v< T, Args... >);
-
             fetch_add_type add(entry.block->committed);
-            entry.block->entries[entry.offset].emplace(std::forward< Args >(args)...);
+            if constexpr (this->is_thread_local_nothrow_constructible< Args... >())
+            {
+                entry.block->entries[entry.offset].emplace(std::move(this->thread_local_optional().value()));
+                this->thread_local_optional().reset();
+            } 
+            else
+            {
+                entry.block->entries[entry.offset].emplace(std::forward< Args >(args)...);
+            }
         }
 
         std::pair< status_type, entry > reserve_entry(block_type* block, Backoff& backoff)
@@ -394,36 +403,24 @@ namespace containers
             }
         }
 
-        bool consume_entry(entry entry, std::optional< T >& value)
+        void consume_entry(entry entry, std::optional< T >& value)
         {
             fetch_add_type add(entry.block->consumed);
-            if (traits_type::is_valid(entry.block->entries[entry.offset]))
-            {
-                reset_type reset(entry.block->entries[entry.offset]);
-                value.emplace(std::move(entry.block->entries[entry.offset].value()));
-                return true;
-            }
-
-            return false;
-
+            reset_type reset(entry.block->entries[entry.offset]);
+            value.emplace(std::move(entry.block->entries[entry.offset].value()));
+            
             // Drop-old mode:
             //auto allocated = entry.block->allocated.load();
             //if(allocated.version != entry.version) value.reset();
             //return data;
         }
 
-        bool consume_entry(entry entry, T& value)
+        void consume_entry(entry entry, T& value)
         {
             fetch_add_type add(entry.block->consumed);
-            if (traits_type::is_valid(entry.block->entries[entry.offset]))
-            {
-                reset_type reset(entry.block->entries[entry.offset]);
-                value = std::move(entry.block->entries[entry.offset].value());
-                return true;
-            }
-
-            return false;
-
+            reset_type reset(entry.block->entries[entry.offset]);
+            value = std::move(entry.block->entries[entry.offset].value());
+            
             // Drop-old mode:
             //auto allocated = entry.block->allocated.load();
             //if(allocated.version != entry.version) value.reset();
@@ -506,7 +503,7 @@ namespace containers
             while (true)
             {
                 auto [head, block] = get_block(phead_);
-                auto [status, entry] = allocate_entry(block);
+                auto [status, entry] = allocate_entry(block, std::forward< Args >(args)...);
                 switch (status)
                 {
                 case status_type::success:
@@ -541,9 +538,8 @@ namespace containers
                 switch (status)
                 {
                 case status_type::success:
-                    if (consume_entry(entry, result))
-                        return true;
-                    continue;
+                    consume_entry(entry, result);
+                    return true;
                 case status_type::fail: return false;
                 case status_type::busy: break;
                 case status_type::block_done:
@@ -558,11 +554,6 @@ namespace containers
             }
         }
 
-        // TODO: empty does not distinguish between successfully commited data
-        // and exceptions during commits (that increment commited nevertheless).
-        // For multi-threaded case it is not an issue as empty() can't be trusted
-        // anyway, for single-threaded case it is a bit strange. And it might be
-        // easy to handle by counting failed commits.
         bool empty() const
         {
             while (true)

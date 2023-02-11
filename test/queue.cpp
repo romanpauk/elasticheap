@@ -128,14 +128,11 @@ TEST(bounded_queue_bbq_test, exceptions)
 
     containers::bounded_queue_bbq< throwing_type, queue_size * 2 > queue;
     ASSERT_THROW(queue.emplace(0, true), throwing_type::error);
-
-    // TODO: the value is in the queue, it just is not valid. But empty() can't know.
-    // pop() knows. 
-    ASSERT_FALSE(queue.empty()); 
+    ASSERT_TRUE(queue.empty()); 
     ASSERT_FALSE(queue.pop(t));
-    ASSERT_TRUE(queue.empty());
-
     ASSERT_NO_THROW(queue.emplace(1, false));
+    ASSERT_FALSE(queue.empty());
     ASSERT_TRUE(queue.pop(t));
+    ASSERT_TRUE(queue.empty());
     ASSERT_EQ(t.value, 1);
 }
