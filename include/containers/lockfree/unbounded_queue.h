@@ -151,7 +151,7 @@ namespace containers
         typename T,
         typename Allocator = detail::hazard_era_allocator< T >,
         typename Backoff = detail::exponential_backoff<>,
-        typename InnerQueue = bounded_queue_bbq_block< T, 1024, Backoff >
+        typename InnerQueue = bounded_queue_bbq_block< T, 1 << 16, Backoff >
     > class unbounded_blocked_queue
     {
         struct node
