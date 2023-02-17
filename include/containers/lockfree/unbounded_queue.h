@@ -29,7 +29,7 @@ namespace containers
     {
         struct node
         {
-            ~node() { value.reset(); }
+            ~node() { if constexpr (!detail::is_trivial_v< T >) value.reset(); }
 
             std::atomic< node* > next{};
             detail::optional< T > value;
@@ -151,7 +151,7 @@ namespace containers
         typename T,
         typename Allocator = detail::hazard_era_allocator< T >,
         typename Backoff = detail::exponential_backoff<>,
-        typename InnerQueue = bounded_queue_bbq_block< T, 1 << 16, Backoff >
+        typename InnerQueue = bounded_queue_bbq_block< T, 1 << 16 >
     > class unbounded_blocked_queue
     {
         struct node

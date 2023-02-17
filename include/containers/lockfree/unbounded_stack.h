@@ -28,7 +28,7 @@ namespace containers
     {
         struct node
         {
-            ~node() { value.reset(); }
+            ~node() { if constexpr (!std::is_trivially_destructible_v< T >) value.reset(); }
 
             node* next;
             detail::optional< T > value;
