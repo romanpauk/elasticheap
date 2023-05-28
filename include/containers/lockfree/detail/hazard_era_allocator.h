@@ -67,7 +67,7 @@ namespace containers::detail
 
         struct thread_guard
         {
-            ~thread_guard() { instance().clear_reservations(ThreadManager::instance().id()); }
+            ~thread_guard() { instance().clear_reservations(ThreadManager::id()); }
         };
 
         static hazard_era_allocator_base< ThreadManager >& instance()
@@ -82,12 +82,12 @@ namespace containers::detail
         {
             struct thread_destructor
             {
-                ~thread_destructor() { instance().clear(ThreadManager::instance().id()); }
+                ~thread_destructor() { instance().clear(ThreadManager::id()); }
             };
 
             // Register thread first, dtor second, so dtor runs before thread gets unregistered
             
-            static thread_local size_t id = ThreadManager::instance().id();
+            static thread_local size_t id = ThreadManager::id();
             static thread_local thread_destructor dtor;
 
             return id;

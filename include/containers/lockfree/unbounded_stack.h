@@ -8,7 +8,7 @@
 #pragma once
 
 #include <containers/lockfree/detail/exponential_backoff.h>
-#include <containers/lockfree/detail/hazard_era_allocator.h>
+#include <containers/lockfree/detail/hyaline_allocator.h>
 #include <containers/lockfree/detail/optional.h>
 #include <containers/lockfree/bounded_stack.h>
 
@@ -22,12 +22,16 @@ namespace containers
     //
     template<
         typename T,
-        typename Allocator = detail::hazard_era_allocator< T >,
+        typename Allocator = detail::hyaline_allocator< T >,
         typename Backoff = detail::exponential_backoff<>
     > class unbounded_stack
     {
         struct node
         {
+            template< typename... Args > node(node* n, Args&&... args)
+                : next(n), value(std::forward< Args >(args)...)
+            {}
+
             ~node() { if constexpr (!std::is_trivially_destructible_v< T >) value.reset(); }
 
             node* next;
@@ -35,25 +39,27 @@ namespace containers
         };
 
         using allocator_type = typename Allocator::template rebind< node >::other;
-        allocator_type allocator_;
+        using allocator_traits_type = std::allocator_traits< allocator_type >;
 
+        allocator_type allocator_;
         alignas(64) std::atomic< node* > head_{};
 
     public:
         using value_type = T;
 
-        unbounded_stack(Allocator allocator = Allocator())
-            : allocator_(allocator)
-        {}
-
+        unbounded_stack() = default;
+        
         ~unbounded_stack()
         {
+            // TODO: this is destroy_and_deallocate()
             clear(head_.load(std::memory_order_acquire), &allocator_type::deallocate);
         }
 
         template< typename... Args > void emplace(Args&&... args)
         {
-            auto head = allocator_.allocate(head_.load(), std::forward< Args >(args)...);
+            auto head = allocator_traits_type::allocate(allocator_, 1);
+            allocator_traits_type::construct(allocator_, head, head_.load(), std::forward< Args >(args)...);
+
             Backoff backoff;
             while (true)
             {
@@ -103,12 +109,12 @@ namespace containers
         }
 
     private:
-        void clear(node* head, void (allocator_type::*deallocate)(node*))
+        void clear(node* head, void (allocator_type::*deallocate)(node*, size_t))
         {
             while (head)
             {
                 auto next = head->next;
-                (allocator_.*deallocate)(head);
+                (allocator_.*deallocate)(head, 1);
                 head = next;
             }
         }
@@ -124,33 +130,39 @@ namespace containers
     //
     template<
         typename T,
-        typename Allocator = detail::hazard_era_allocator< T >,
+        typename Allocator = detail::hyaline_allocator< T >,
         typename Backoff = detail::exponential_backoff<>,
-        typename InnerStack = bounded_stack_base< T, 128, Backoff, static_cast<uint32_t>(-1) >
+        typename InnerStack = bounded_stack_base< T, 1 << 16, Backoff, static_cast<uint32_t>(-1) >
     > class unbounded_blocked_stack
     {
         struct node
         {
+            node() = default;
+            node(node* n): next(n) {}
+
             node* next{};
             InnerStack stack;
         };
 
         using allocator_type = typename Allocator::template rebind< node >::other;
-        mutable allocator_type allocator_;
+        using allocator_traits_type = std::allocator_traits< allocator_type >;
 
+        mutable allocator_type allocator_;
         alignas(64) std::atomic< node* > head_{};
 
     public:
         using value_type = T;
 
-        unbounded_blocked_stack(Allocator allocator = Allocator())
-            : allocator_(allocator)
+        unbounded_blocked_stack()
         {
-            head_ = allocator_.allocate();
+            auto head = allocator_traits_type::allocate(allocator_, 1);
+            allocator_traits_type::construct(allocator_, head);
+            head_.store(head);
         }
 
         ~unbounded_blocked_stack()
         {
+            // TODO: this really is destroy_and_deallocate()...
             clear(head_.load(), &allocator_type::deallocate);
         }
 
@@ -171,9 +183,13 @@ namespace containers
                 }
                 else
                 {
-                    auto new_head = allocator_.allocate(head);
-                    if (!head_.compare_exchange_strong(new_head->next, new_head, std::memory_order_release))
-                        allocator_.deallocate(new_head);
+                    auto new_head = allocator_traits_type::allocate(allocator_, 1);
+                    allocator_traits_type::construct(allocator_, new_head, head);
+
+                    if (!head_.compare_exchange_strong(new_head->next, new_head, std::memory_order_release)) {
+                        allocator_traits_type::destroy(allocator_, new_head);
+                        allocator_traits_type::deallocate(allocator_, new_head, 1);
+                    }
                 }
             }
         }
@@ -223,8 +239,7 @@ namespace containers
         void clear()
         {
             Backoff backoff;
-            node* null = nullptr;
-            auto head = head_.load();
+            auto head = head_.load(std::memory_order_relaxed);
             while (head && !head_.compare_exchange_weak(head, nullptr))
                 backoff();
             clear(head, &allocator_type::retire);
@@ -233,12 +248,14 @@ namespace containers
         }
 
     private:
-        void clear(node* head, void (allocator_type::*deallocate)(node*))
+        void clear(node* head, void (allocator_type::*deallocate)(node*, size_t))
         {
             while (head)
             {
                 auto next = head->next;
-                (allocator_.*deallocate)(head);
+                // TODO: this is either retire or deallocate. For retire, we can't call dtor,
+                // for deallocate, we should...
+                (allocator_.*deallocate)(head, 1);
                 head = next;
             }
         }

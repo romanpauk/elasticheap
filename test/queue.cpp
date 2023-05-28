@@ -75,7 +75,7 @@ TEST(bounded_queue_bbq_test, nondefault_entry)
             other.counter_ = 0;
         }
       
-        nondefault& operator = (nondefault&& other)
+        nondefault& operator = (nondefault&& other) noexcept(true)
         {
             counter_ = other.counter_;
             other.counter_ = 0;

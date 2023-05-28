@@ -23,6 +23,27 @@ namespace containers
     // https://www.usenix.org/conference/atc22/presentation/wang-jiawei
     //
 
+    /*
+        Invalidating BBQ:
+            To be able to use the queue in unbounded construction, we need to be able to invalidate the queue, so its
+            usage is monotonic and consumers can remove it when they are done with it.
+
+        Producers:
+            After emplace fails, try to invalidate phead.
+            If invalidated successfully, no one will be able to advance phead anymore.
+                The problem is emplaces running at the moment of invalidation that are incrementing allocated
+                as they need to be synchronized with consumers to not lose elements.
+
+        Consumers:
+            After invalid phead is detected, all remaining elements need to be popped and queue removed.
+            Invalidate phead.allocated, or-ing -1 into version. After that, no element will appear in the queue.
+            There can be temporary allocate increment, reserve_entry() will return busy waiting for commit, retrying.
+            The increment will get reverted, causing reserve_entry() return failure on next iteration. Such queue
+            can be retired as it is not possible to add an element to it after phead.allocated invalidation.        
+   */
+
+#define BBQ_INVALIDATION
+
     constexpr size_t log2(size_t value) { return value < 2 ? 1 : 1 + log2(value / 2); }
 
     enum class status
@@ -65,6 +86,20 @@ namespace containers
         ~fetch_add() { counter_.fetch_add(1); }
     private:
         std::atomic< uint64_t >& counter_;
+    };
+
+    template< typename Target, typename Source > struct assign;
+
+    template< typename T > struct assign< T, T >
+    {
+        static constexpr bool is_nothrow = std::is_nothrow_move_assignable_v< T >;
+        static void apply(T& target, T&& source) { target = std::move(source); }
+    };
+
+    template< typename T > struct assign< std::optional< T >, T >
+    {
+        static constexpr bool is_nothrow = std::is_nothrow_move_constructible_v< T >;
+        static void apply(std::optional< T >& target, T&& source) { target.emplace(std::move(source)); }
     };
 
     template<
@@ -110,21 +145,11 @@ namespace containers
             block->committed.fetch_add(1);
         }
 
-        static void consume_entry(block* block, const entry& entry, std::optional< T >& value)
+        template< typename R > static void consume_entry(block* block, const entry& entry, R& result)
         {
-            static_assert(std::is_nothrow_move_assignable_v< T >);
+            static_assert(assign< R, T >::is_nothrow); 
 
-            value = std::move(block->entries[entry.offset].value());
-            block->consumed.fetch_add(1);
-
-            // TODO: drop-old mode
-        }
-
-        static void consume_entry(block* block, const entry& entry, T& value)
-        {
-            static_assert(std::is_nothrow_move_assignable_v< T >);
-
-            value = std::move(block->entries[entry.offset].value());
+            assign< R, T >::apply(result, std::move(block->entries[entry.offset].value()));
             block->consumed.fetch_add(1);
 
             // TODO: drop-old mode
@@ -201,19 +226,20 @@ namespace containers
             block->entries[entry.offset].emplace(std::forward< Args >(args)...);
             block->flags[entry.offset] = true;
         }
-        
-        static bool consume_entry(block* block, const entry& entry, std::optional< T >& value)
+
+        template< typename R > static std::enable_if_t< assign<R, T >::is_nothrow, bool > consume_entry(block* block, const entry& entry, R& result)
         {
-            fetch_add add(block->consumed);
             if (block->flags[entry.offset])
             {
-                reset reset(block->entries[entry.offset]);
-                value.emplace(std::move(block->entries[entry.offset].value()));
+                assign< R, T >::apply(result, std::move(block->entries[entry.offset].value()));
+                block->entries[entry.offset].reset();
+                block->consumed.fetch_add(1);
                 return true;
             }
             else
             {
                 block->flags[entry.offset] = true;
+                block->consumed.fetch_add(1);
                 return false;
             }
 
@@ -222,13 +248,13 @@ namespace containers
             //if(allocated.version != entry.version) value.reset();
         }
 
-        static bool consume_entry(block* block, const entry& entry, T& value)
+        template< typename R > static std::enable_if_t< !assign<R, T >::is_nothrow, bool > consume_entry(block * block, const entry & entry, R & result)
         {
             fetch_add add(block->consumed);
             if (block->flags[entry.offset])
             {
                 reset reset(block->entries[entry.offset]);
-                value = std::move(block->entries[entry.offset].value());
+                assign< R, T >::apply(result, std::move(block->entries[entry.offset].value()));
                 return true;
             }
             else
@@ -271,14 +297,21 @@ namespace containers
     public:
         static std::pair< status, entry > allocate_entry(block* block)
         {
-            if (cursor(block->allocated.load()).offset >= BlockSize)
+            auto allocated = cursor(block->allocated.load());
+            if (allocated.offset >= BlockSize)
                 return { status::block_done, {} };
 
-            auto allocated = cursor(block->allocated.fetch_add(1));
+            allocated = cursor(block->allocated.fetch_add(1));
             if (allocated.offset >= BlockSize)
             {
                 return { status::block_done, {} };
             }
+
+        #if defined(BBQ_INVALIDATION)
+            if (allocated.version == -1)
+                return { status::block_done, {} };
+        #endif
+
             return { status::success, { allocated.offset, 0 } };
         }
 
@@ -435,7 +468,7 @@ namespace containers
             return false;
         }
     };
-    
+
     template<
         typename T,
         size_t Size,
@@ -458,6 +491,11 @@ namespace containers
         std::pair< cursor, block* > get_block(std::atomic< uint64_t >& head) const
         {
             auto value = cursor(head.load());
+
+        #if defined(BBQ_INVALIDATION)
+            if (value.version == -1) return { value, nullptr };
+        #endif
+
             return { value, &blocks_[value.offset & (blocks_.size() - 1)] };
         }
         
@@ -510,9 +548,47 @@ namespace containers
             atomic_fetch_max_explicit(&chead_, (uint64_t)cursor(head.offset + 1, head.version));
             return true;
         }
-        
+
     public:
         using value_type = T;
+
+    #if defined(BBQ_INVALIDATION)
+        bool invalid()
+        {
+            auto head = cursor(phead_.load(std::memory_order_relaxed));
+            return head.version == -1;
+        }
+
+        bool invalidate_phead()
+        {
+            auto head = cursor(phead_.load(std::memory_order_relaxed));
+            if (head.version == -1)
+                return true;
+
+            auto current = (uint64_t)head;
+            if (phead_.compare_exchange_strong(current, (uint64_t)cursor(head.offset, -1)))
+            {
+                return true;
+            }
+
+            return cursor(current).version == -1;
+        }
+
+        bool invalidate_phead_allocated()
+        {
+            auto head = cursor(phead_.load(std::memory_order_relaxed));
+            if (head.version == -1)
+            {
+                auto block = &blocks_[head.offset & (blocks_.size() - 1)];
+                if (cursor(block->allocated.load(std::memory_order_relaxed)).version != -1)
+                    block->allocated.fetch_or((uint64_t)cursor(0, -1));
+
+                return true;
+            }
+
+            return false;
+        }
+    #endif
 
         bounded_queue_bbq()
         {
@@ -532,6 +608,9 @@ namespace containers
             while (true)
             {
                 auto [head, block] = get_block(phead_);
+            #if defined(BBQ_INVALIDATION)
+                if (!block) return false;
+            #endif
                 auto status = this->emplace_block(block, std::forward< Args >(args)...);
                 switch (status)
                 {
@@ -541,10 +620,11 @@ namespace containers
                     switch (advance_phead(head))
                     {
                     case status::success: continue;
-                    case status::busy: //break;
+                    case status::busy: break;
                     case status::fail: return false;
                     default: assert(false);
                     }
+                    break;
                 default:
                     assert(false);
                 }
@@ -569,7 +649,7 @@ namespace containers
                 case status::success:
                     this->consume_entry(block, entry, result);
                     return true;
-                case status::busy: //break;
+                case status::busy: break;
                 case status::fail: return false;
                 case status::block_done:
                     if (!advance_chead(head, entry.version))
@@ -595,7 +675,7 @@ namespace containers
                 {
                 case status::success:
                     if (this->consume_entry(block, entry, result)) return true; else continue;
-                case status::busy: //break;
+                case status::busy: break;
                 case status::fail: return false;
                 case status::block_done:
                     if (!advance_chead(head, entry.version))

@@ -18,64 +18,80 @@ static size_t gettid() { return GetCurrentThreadId(); }
 
 namespace containers::detail
 {
-    template< size_t N = 1024 > class thread_manager
+    template< size_t N = 32 > class thread_manager
     {
-        struct thread_registration
-        {
-            thread_registration(std::array< detail::aligned< std::atomic< uint64_t > >, N >& threads)
-                : threads_(threads)
-            {
-                for (size_t i = 0; i < threads_.size(); ++i)
-                {
-                    auto tid = threads_[i].load(std::memory_order_relaxed);
-                    if (!tid)
-                    {
-                        if (threads_[i].compare_exchange_strong(tid, gettid()))
-                        {
-                            index_ = i;
-                            return;
-                        }
-                    }
-                    else if (tid == gettid())
-                    {
-                        // Check for multiple thread registrations of the same thread. Failure here
-                        // means the singleton is placed somewhere where it should not be, so it gets initialized
-                        // multiple times.
-                        std::abort();
-                    }
-                }
-
-                // Failed to find free spot for a thread
-                std::abort();
-            }
-
-            ~thread_registration()
-            {
-                threads_[index_].store(0);
-            }
-
-            size_t index_;
-            std::array< detail::aligned< std::atomic< uint64_t > >, N >& threads_;
-        };
-
     public:
         static const int max_threads = N;
-
-        static thread_manager< N >& instance()
+        
+        static size_t id()
         {
-            static thread_manager< N > instance;
-            return instance;
+            return id_;
+        }
+    /*
+        static size_t token()
+        {
+        #if defined(_WIN32)
+            return mix(__readgsqword(0x30)); // Address of Thread Information Block
+        #else
+            return mix(reinterpret_cast<size_t>(&token_));
+        #endif
+        }
+    */  
+    private:
+        static size_t mix(size_t value)
+        {
+            // Bring upper bits down so they impact 'value & (size - 1)'
+            return value ^= (value >> 47) ^ (value >> 23);
         }
 
-        size_t id()
+        static size_t register_thread()
         {
-            static thread_local thread_registration registration(thread_ids);
+            struct thread_registration
+            {
+                thread_registration()
+                {
+                    for (size_t i = 0; i < thread_ids_.size(); ++i)
+                    {
+                        auto tid = thread_ids_[i].load(std::memory_order_relaxed);
+                        if (!tid)
+                        {
+                            if (thread_ids_[i].compare_exchange_strong(tid, gettid()))
+                            {
+                                index_ = i;
+                                return;
+                            }
+                        }
+                        else if (tid == gettid())
+                        {
+                            // Check for multiple thread registrations of the same thread. Failure here
+                            // means the singleton is placed somewhere where it should not be, so it gets initialized
+                            // multiple times.
+                            std::abort();
+                        }
+                    }
+
+                    // Failed to find free spot for a thread
+                    std::abort();
+                }
+
+                ~thread_registration()
+                {
+                    thread_ids_[index_].store(0);
+                }
+
+                size_t index_;
+            };
+
+            static thread_local thread_registration registration;
             return registration.index_;
         }
 
-    private:
-        alignas(64) std::array < detail::aligned< std::atomic< uint64_t > >, N > thread_ids;
+        alignas(64) static std::array < std::atomic< uint64_t >, N > thread_ids_;
+        alignas(64) static thread_local size_t id_;
     };
+
+    template< size_t N > alignas(64) std::array < std::atomic< uint64_t >, N > thread_manager< N >::thread_ids_;
+    template< size_t N > alignas(64) thread_local size_t thread_manager< N >::id_ = thread_manager< N >::register_thread();
 
     using thread = thread_manager<>;
 }
