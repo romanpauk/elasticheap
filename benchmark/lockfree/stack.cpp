@@ -15,6 +15,8 @@
 #include <list>
 #include <random>
 
+#include "factory.h"
+
 static const auto max_threads = std::thread::hardware_concurrency();
 static const auto iterations = 1024;
 
@@ -23,10 +25,11 @@ template< typename T > class stl_stack
 public:
     using value_type = T;
 
-    void push(T value)
+    bool push(T value)
     {
         auto guard = std::lock_guard(mutex_);
         stack_.push(value);
+        return true;
     }
 
     bool pop(T& value)
@@ -57,49 +60,42 @@ private:
 
 template< typename Stack > static void stack_push_pop(benchmark::State& state)
 {
-    static Stack stack;
+    auto& stack = factory<Stack>::get();
     int value = 0;
+    size_t ops = 0;
     for (auto _ : state)
     {
         stack.push(1);
-        stack.pop(value);
+        ops += stack.pop(value);
     }
 
-    state.SetBytesProcessed(state.iterations() * 2);
+    state.SetBytesProcessed(ops);
+    if (state.thread_index() == 0)
+        factory<Stack>::reset();
 }
 
 template< typename Stack > static void stack_push_pop_rand(benchmark::State& state)
 {
     std::minstd_rand r;
-
-    static Stack stack;
+    auto& stack = factory<Stack>::get();
     typename Stack::value_type value{}, result{};
+    size_t ops = 0;
     for (auto _ : state)
     {
         if (r() & 1)
             stack.push(value++);
         else
-            stack.pop(result);
+            ops += stack.pop(result);
     }
 
-    state.SetBytesProcessed(state.iterations() * 2);
-}
-
-template< typename Stack > static void stack_push(benchmark::State& state)
-{
-    for (auto _ : state)
-    {
-        Stack stack;
-        for (size_t i = 0; i < stack.capacity(); ++i) {
-            stack.push(1);
-        }
-    }
-    state.SetBytesProcessed(state.iterations() * Stack::capacity());
+    state.SetBytesProcessed(ops);
+    if(state.thread_index() == 0)
+        factory<Stack>::reset();
 }
 
 template< typename Stack > static void stack_pop(benchmark::State& state)
 {
-    static Stack stack;
+    auto& stack = factory<Stack>::get();
     typename Stack::value_type value;
     for (auto _ : state)
     {
@@ -107,11 +103,13 @@ template< typename Stack > static void stack_pop(benchmark::State& state)
     }
 
     state.SetBytesProcessed(state.iterations());
+    if(state.thread_index() == 0)
+        factory<Stack>::reset();
 }
 
 template< typename Stack > static void stack_empty(benchmark::State& state)
 {
-    static Stack stack;
+    auto& stack = factory<Stack>::get();
     typename Stack::value_type value;
     for (auto _ : state)
     {
@@ -119,6 +117,8 @@ template< typename Stack > static void stack_empty(benchmark::State& state)
     }
 
     state.SetBytesProcessed(state.iterations());
+    if(state.thread_index())
+        factory<Stack>::reset();
 }
 
 BENCHMARK_TEMPLATE(stack_push_pop, stl_stack<int>)->ThreadRange(1, max_threads)->UseRealTime();
@@ -133,7 +133,6 @@ BENCHMARK_TEMPLATE(stack_empty, containers::unbounded_stack<int>)->ThreadRange(1
 
 BENCHMARK_TEMPLATE(stack_push_pop, containers::bounded_stack<int, 1024>)->ThreadRange(1, max_threads)->UseRealTime();
 BENCHMARK_TEMPLATE(stack_push_pop_rand, containers::bounded_stack<int, 1024>)->ThreadRange(1, max_threads)->UseRealTime();
-BENCHMARK_TEMPLATE(stack_push, containers::bounded_stack<int, 1024>)->Iterations(iterations)->UseRealTime();
 BENCHMARK_TEMPLATE(stack_pop, containers::bounded_stack<int, 1024>)->ThreadRange(1, max_threads)->UseRealTime();
 BENCHMARK_TEMPLATE(stack_empty, containers::bounded_stack<int, 1024>)->ThreadRange(1, max_threads)->UseRealTime();
 

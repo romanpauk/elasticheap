@@ -68,8 +68,7 @@ namespace containers
         {
             auto guard = allocator_.guard();
             auto n = allocator_traits_type::allocate(allocator_, 1);
-            allocator_traits_type::construct(allocator_, n, nullptr, T{std::forward< Args >(args)...});
-
+            allocator_traits_type::construct(allocator_, n, nullptr, std::move(T{std::forward< Args >(args)...})); // TODO: why does MSVC need a move?
             Backoff backoff;
             while (true)
             {

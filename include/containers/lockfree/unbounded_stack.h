@@ -55,7 +55,7 @@ namespace containers
             clear(head_.load(std::memory_order_acquire), &allocator_type::deallocate);
         }
 
-        template< typename... Args > void emplace(Args&&... args)
+        template< typename... Args > bool emplace(Args&&... args)
         {
             auto head = allocator_traits_type::allocate(allocator_, 1);
             allocator_traits_type::construct(allocator_, head, head_.load(), std::forward< Args >(args)...);
@@ -68,10 +68,11 @@ namespace containers
 
                 backoff();
             }
+            return true;
         }
 
-        void push(T&& value) { emplace(std::move(value)); }
-        void push(const T& value) { emplace(value); }
+        bool push(T&& value) { return emplace(std::move(value)); }
+        bool push(const T& value) { return emplace(value); }
 
         bool pop(T& value)
         {
@@ -166,14 +167,14 @@ namespace containers
             clear(head_.load(), &allocator_type::deallocate);
         }
 
-        template< typename... Args > void emplace(Args&&... args)
+        template< typename... Args > bool emplace(Args&&... args)
         {
             auto guard = allocator_.guard();
             while (true)
             {
                 auto head = allocator_.protect(head_, std::memory_order_acquire);
                 if (head->stack.emplace(std::forward< Args >(args)...))
-                    return;
+                    return true;
 
                 auto top = head->stack.top_.load(std::memory_order_relaxed);
                 if (top.index == -1)
@@ -194,8 +195,8 @@ namespace containers
             }
         }
 
-        void push(T&& value) { emplace(std::move(value)); }
-        void push(const T& value) { emplace(value); }
+        bool push(T&& value) { return emplace(std::move(value)); }
+        bool push(const T& value) { return emplace(value); }
 
         bool pop(T& value)
         {

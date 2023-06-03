@@ -66,6 +66,7 @@ if(CONTAINERS_ENABLE_BENCHMARK)
     add_executable(containers_benchmark
         benchmark/main.cpp
         benchmark/lockfree/atomic.cpp
+        benchmark/lockfree/counter.cpp
         benchmark/lockfree/stack.cpp
         benchmark/lockfree/queue.cpp
     )
@@ -85,6 +86,7 @@ endif()
 if(CONTAINERS_ENABLE_TESTING)
     add_executable(containers_test
         test/atomic.cpp
+        test/counter.cpp
         test/queue.cpp
         test/stack.cpp
     )

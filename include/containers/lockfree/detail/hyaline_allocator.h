@@ -204,26 +204,27 @@ namespace containers::detail
         alignas(64) std::array< aligned< std::atomic< head_t > >, N > heads_;
 
         struct guard_class {
-            guard_class(hyaline_allocator_type& allocator, size_t id)
+            guard_class() = default;
+            guard_class(hyaline_allocator_type* allocator, size_t id)
                 : allocator_(allocator)
                 , id_(id & (N - 1))
-                , end_(allocator.enter(id_)) {}
+                , end_(allocator->enter(id_)) {}
 
-            ~guard_class() { allocator_.leave(id_, end_); }
+            ~guard_class() { allocator_->leave(id_, end_); }
 
         private:
-            hyaline_allocator_type& allocator_;
+            hyaline_allocator_type* allocator_;
             size_t id_;
             node_list_t* end_;
         };
 
         node_list_t* enter(size_t id) {
-            heads_[id].store({ nullptr, 1 });
+            heads_[id].store({ nullptr, 1 }, std::memory_order_release);
             return nullptr;
         }
 
         void leave(size_t id, node_list_t* node) {
-            auto head = heads_[id].exchange({ nullptr, 0 });
+            auto head = heads_[id].exchange({ nullptr, 0 }, std::memory_order_acq_rel); // synchronize with retire()
             if (head.get_ptr() != nullptr)
                 traverse(head.get_ptr(), node);
         }
@@ -259,13 +260,13 @@ namespace containers::detail
                 n->node = node;
 
                 do {
-                    head = heads_[i];
+                    head = heads_[i].load(std::memory_order_acquire); // synchronize with enter()
                     if (head.get_ref() == 0)
                         goto next;
         
                     new_head = head_t(n, head.get_ref());
                     n->next = head.get_ptr();
-                } while (!heads_[i].compare_exchange_strong(head, new_head));
+                } while (!heads_[i].compare_exchange_strong(head, new_head, std::memory_order_acq_rel)); // synchronize with leave()
                 ++inserts;
             next:
                 ;
@@ -327,7 +328,7 @@ namespace containers::detail
         
         // TODO: in some cases using token() is a bit faster (sometimes around 10%). On the other hand non-sequential
         // id requires DCAS later. For simplicity, try to finish this with id() and see.
-        auto guard() { return guard_class(*this, ThreadManager::id()); }
+        auto guard() { return guard_class(this, ThreadManager::id()); }
 
         T* allocate(size_t n) {
             assert(n == 1);

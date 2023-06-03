@@ -8,31 +8,34 @@
 #pragma once
 
 #include <emmintrin.h>
+#include <cstdint>
 
-namespace containers::detail
-{
-    template< size_t Initial = 256, size_t Max = 65536 > struct exponential_backoff
-    {
+namespace containers::detail {
+    template< uint64_t Initial = 1<<16, uint64_t Max = 1<<24 > struct exponential_backoff {
         static_assert(Initial % 2 == 0);
         static_assert(Max % 2 == 0);
 
-        void operator() ()
-        {
-            size_t iters = spin();
+        exponential_backoff() = default;
+
+        void operator() () {
+            auto iters = spin();
             while (iters--)
                 _mm_pause();
         }
 
-        size_t spin()
-        {
-            if ((state_ <<= 1) >= Max)
-                state_ = Max;
-            return state_;
+        uint64_t spin() {
+            auto jitter = (uint64_t)this;
+            jitter ^= jitter >> 17;
+
+            auto state = state_;
+            if (state_ < Max)
+                state_ <<= 1;
+            return (uint64_t)jitter & (state - 1);
         }
 
-        size_t state() const { return state_; }
+        uint64_t state() const { return state_; }
 
     private:
-        size_t state_ = Initial;
+        uint64_t state_ = Initial;
     };
 }
