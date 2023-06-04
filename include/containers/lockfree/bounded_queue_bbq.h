@@ -42,8 +42,6 @@ namespace containers
             can be retired as it is not possible to add an element to it after phead.allocated invalidation.        
    */
 
-#define BBQ_INVALIDATION
-
     constexpr size_t log2(size_t value) { return value < 2 ? 1 : 1 + log2(value / 2); }
 
     enum class status
@@ -283,6 +281,7 @@ namespace containers
     template<
         typename T,
         size_t Size,
+        bool Invalidation,
         size_t BlockSize,
         typename Backoff
     > class bounded_queue_bbq_common
@@ -307,11 +306,11 @@ namespace containers
                 return { status::block_done, {} };
             }
 
-        #if defined(BBQ_INVALIDATION)
-            if (allocated.version == -1)
-                return { status::block_done, {} };
-        #endif
-
+            if constexpr(Invalidation) {
+                if (allocated.version == -1)
+                    return { status::block_done, {} };
+            }
+        
             return { status::success, { allocated.offset, 0 } };
         }
 
@@ -365,7 +364,7 @@ namespace containers
         size_t Size,
         typename Backoff = detail::exponential_backoff<>
     > class bounded_queue_bbq_block
-        : bounded_queue_bbq_common< T, Size, Size, Backoff >
+        : bounded_queue_bbq_common< T, Size, false, Size, Backoff >
     {
         using base = bounded_queue_bbq_base< T, Size >;
         using block = typename base::block;
@@ -467,15 +466,19 @@ namespace containers
 
             return false;
         }
+
+        bool invalidate_push() { return true; }
+        bool invalidate_pop() { return true; }
     };
 
     template<
         typename T,
         size_t Size,
+        bool Invalidation = false,
         size_t BlockSize = Size / (1 << (std::max(size_t(1), log2(Size) / 4) - 1)), // log(num of blocks) = max(1, log(size)/4)
         typename Backoff = detail::exponential_backoff<>
     > class bounded_queue_bbq
-        : bounded_queue_bbq_common< T, Size, BlockSize, Backoff >
+        : bounded_queue_bbq_common< T, Size, Invalidation, BlockSize, Backoff >
     {
         using base = bounded_queue_bbq_base< T, Size >;
         using block = typename base::block;
@@ -492,9 +495,8 @@ namespace containers
         {
             auto value = cursor(head.load());
 
-        #if defined(BBQ_INVALIDATION)
-            if (value.version == -1) return { value, nullptr };
-        #endif
+            if constexpr (Invalidation)
+                if (value.version == -1) return { value, nullptr };
 
             return { value, &blocks_[value.offset & (blocks_.size() - 1)] };
         }
@@ -552,14 +554,9 @@ namespace containers
     public:
         using value_type = T;
 
-    #if defined(BBQ_INVALIDATION)
-        bool invalid()
-        {
-            auto head = cursor(phead_.load(std::memory_order_relaxed));
-            return head.version == -1;
-        }
-
-        bool invalidate_phead()
+        // Note: those are not named by what they invalidate, but from where they need
+        // to be called
+        bool invalidate_push()
         {
             auto head = cursor(phead_.load(std::memory_order_relaxed));
             if (head.version == -1)
@@ -574,7 +571,7 @@ namespace containers
             return cursor(current).version == -1;
         }
 
-        bool invalidate_phead_allocated()
+        bool invalidate_pop()
         {
             auto head = cursor(phead_.load(std::memory_order_relaxed));
             if (head.version == -1)
@@ -588,8 +585,7 @@ namespace containers
 
             return false;
         }
-    #endif
-
+    
         bounded_queue_bbq()
         {
             this->initialize_block(blocks_[0], 0);
@@ -608,9 +604,8 @@ namespace containers
             while (true)
             {
                 auto [head, block] = get_block(phead_);
-            #if defined(BBQ_INVALIDATION)
-                if (!block) return false;
-            #endif
+                if constexpr (Invalidation)
+                    if (!block) return false;
                 auto status = this->emplace_block(block, std::forward< Args >(args)...);
                 switch (status)
                 {

@@ -150,16 +150,14 @@ namespace containers
         }
     };
 
-    //
-    // TODO: check the algorithm correctness more
-    // It should be fine, as each block can be used only once and one way only,
-    // first pushed, than consumed, once consumed it can not be pushed anymore.
-    //
+    // TODO: this is some universal construction of unbounded ADT from bounded ones,
+    // need to find out where I have read it.
     template <
         typename T,
         typename Allocator = detail::hyaline_allocator< T >,
         typename Backoff = detail::exponential_backoff<>,
-        typename InnerQueue = bounded_queue_bbq< T, 1 << 16 >
+        typename InnerQueue = bounded_queue_bbq< T, 1 << 16, true >
+        //typename InnerQueue = bounded_queue_bbq_block< T, 1 << 16 >
     > class unbounded_blocked_queue
     {
         struct node
@@ -202,9 +200,7 @@ namespace containers
                 if (tail->queue.emplace(std::forward< Args >(args)...))
                     return true;
 
-            #if defined(BBQ_INVALIDATION)
-                if (tail->queue.invalidate_phead())
-            #endif
+                if (tail->queue.invalidate_push())
                 {
                     auto next = allocator_.protect(tail->next);
                     if (tail == tail_.load())
@@ -245,16 +241,14 @@ namespace containers
                 if (head->queue.pop(value))
                     return true;
 
-            #if defined(BBQ_INVALIDATION)
-                if (head->queue.invalidate_phead_allocated())
+                if (head->queue.invalidate_pop())
                 {
                     if (head->queue.pop(value))
                         return true;
 
                     // Here the queue is really empty
                 }
-            #endif
-
+            
                 auto tail = tail_.load();
                 auto next = allocator_.protect(head->next);
                 if (head == head_.load())
