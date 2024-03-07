@@ -76,7 +76,7 @@ namespace containers
                 // push and pop have no effect, we can wait with finish till there will be someone
                 // pushing to empty stack or popping from non empty stack.
 
-                if constexpr (Mark)
+                if constexpr (Mark != 0)
                     if(top.index == Mark)
                         return false;
 
@@ -103,7 +103,7 @@ namespace containers
             {
                 auto top = top_.load();
 
-                if constexpr (Mark)
+                if constexpr (Mark != 0)
                     if(top.index == Mark)
                         return false;
                 
@@ -129,7 +129,7 @@ namespace containers
         {
             auto top = top_.load();
 
-            if constexpr (Mark)
+            if constexpr (Mark != 0)
                 if(top.index == Mark)
                     return true;
 
