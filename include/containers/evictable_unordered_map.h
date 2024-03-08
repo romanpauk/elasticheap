@@ -133,8 +133,6 @@ namespace containers {
                 }
             }
 
-            void find(const node&) {}
-
             void touch(const node& n) {
                 list_.erase(n);
                 list_.push_front(n);
@@ -176,8 +174,6 @@ namespace containers {
                 }
             }
 
-            void find(const node&) {}
-
             void touch(const node& n) {
                 n.segment->erase(n);
                 n.segment = &segments_[1];
@@ -187,6 +183,27 @@ namespace containers {
         private:
             linked_list<node> segments_[2];
         };
+
+    #if __cpp_lib_generic_unordered_lookup != 201811L
+        template< typename Node, typename Key, bool IsTriviallyDestructible = std::is_trivially_destructible_v<Key> > struct hashable_node;
+        
+        template< typename Node, typename Key> struct hashable_node<Node, Key, true> {
+            hashable_node(const Key& key) {
+                new (const_cast<Key*>(&node().value.first)) Key(key);
+            }
+
+            Node& node() { return *reinterpret_cast<Node*>(&storage_); }
+        private:
+            std::aligned_storage_t< sizeof(Node) > storage_;
+        };
+
+        template< typename Node, typename Key > struct hashable_node<Node, Key, false>
+            : hashable_node<Node, Key, true> 
+        {
+            hashable_node(const Key& key): hashable_node<Node, Key, true>(key) {}
+            ~hashable_node() { const_cast<Key*>(&this->node().value.first)->~Key(); }
+        };
+    #endif
     };
 
     template<
@@ -206,10 +223,18 @@ namespace containers {
     private:    
         struct hash: Hash {
             size_t operator()(const node_type& n) const noexcept { return static_cast<const Hash&>(*this)(n.value.first); }
+        #if __cpp_lib_generic_unordered_lookup == 201811L
+            using is_transparent = void;
+            size_t operator()(const Key& key) const noexcept { return static_cast<const Hash&>(*this)(key); }
+        #endif
         };
 
         struct key_equal : KeyEqual {
             size_t operator()(const node_type& lhs, const node_type& rhs) const noexcept { return static_cast<const KeyEqual&>(*this)(lhs.value.first, rhs.value.first); }
+        #if __cpp_lib_generic_unordered_lookup == 201811L
+            using is_transparent = void;
+            size_t operator()(const Key& lhs, const node_type& rhs) const noexcept { return static_cast<const KeyEqual&>(*this)(lhs, rhs.value.second); }
+        #endif
         };
 
         using values_type = std::unordered_set< node_type, hash, key_equal,
@@ -248,14 +273,23 @@ namespace containers {
         }
 
         iterator find(const Key& key) {
-            // TODO: this is solved by heterogenous hashing in C++20, what about C++17?
-            auto it = values_.find({ {key, Value()} });
+        #if __cpp_lib_generic_unordered_lookup == 201811L
+            auto it = values_.find(key);
+        #else
+            // This still needs to copy the key, but at least not the value.
+            detail::hashable_node<node_type, Key> key_node(key);
+            auto it = values_.find(key_node.node());
+        #endif
             if (it != values_.end())
-                cache_.find(*it);
+                cache_.touch(*it);
             return it;
         }
 
         Value& operator[](const Key& key) {
+            auto it = find(key);
+            if (it != end()) {
+                return const_cast<Value&>(it->second); // TODO: const_cast
+            }
             return const_cast<Value&>(emplace(key, Value()).first->second);
         }
 
