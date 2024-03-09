@@ -94,7 +94,7 @@ namespace containers {
             return (block_map*)byte_allocator().allocate(sizeof(block_map) + sizeof(block_type*) * n);
         }
         void deallocate_block_map(block_map* ptr) { 
-            byte_allocator().deallocate((uint8_t*)ptr, sizeof(block_map) + sizeof(block_type*) * ptr->capacity_);
+            byte_allocator().reclaim((uint8_t*)ptr, sizeof(block_map) + sizeof(block_type*) * ptr->capacity_);
         }
 
         T& read(size_t size, size_t n) {
@@ -178,13 +178,15 @@ namespace containers {
                     size_.store(size + 1, std::memory_order_release);
                     return size + 1;
                 } else if (map_size_ < map->capacity_) {
-                    map->blocks[map_size_++] = allocate_block();
+                    map->blocks[map_size_] = allocate_block();
+                    ++map_size_;
                     goto insert;
                 } else {
                     auto capacity = map->capacity_;
                     auto new_map = allocate_block_map(capacity * BlocksGrowFactor);
                     std::memcpy(new_map->blocks, map->blocks, sizeof(block_type*) * capacity);
-                    new_map->blocks[map_size_++] = allocate_block();
+                    new_map->blocks[map_size_] = allocate_block();
+                    ++map_size_;
                     new_map->capacity_ = capacity * BlocksGrowFactor;
                     deallocate_block_map(map);
                     map_.store(new_map, std::memory_order_relaxed);

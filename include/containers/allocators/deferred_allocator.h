@@ -63,7 +63,7 @@ namespace containers::detail {
             return reinterpret_cast<T*>(ptr + 1);
         }
         
-        void deallocate(T* ptr, size_t) {
+        void reclaim(T* ptr, size_t) {
             stack_.push(buffer_cast(ptr));
         }
 
