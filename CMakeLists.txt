@@ -66,20 +66,6 @@ target_include_directories(containers INTERFACE include)
 target_sources(containers INTERFACE
     include/containers/growable_array.h
     include/containers/evictable_unordered_map.h
-    include/containers/lockfree/atomic.h
-    include/containers/lockfree/bounded_queue.h
-    include/containers/lockfree/bounded_queue_bbq.h
-    include/containers/lockfree/bounded_stack.h
-    include/containers/lockfree/unbounded_queue.h
-    include/containers/lockfree/unbounded_stack.h
-    include/containers/lockfree/detail/aligned.h
-    include/containers/lockfree/detail/atomic16_win32.h
-    include/containers/lockfree/detail/exponential_backoff.h
-    include/containers/lockfree/detail/hazard_era_allocator.h
-    include/containers/lockfree/detail/hyaline_allocator.h
-    include/containers/lockfree/detail/leaking_allocator.h
-    include/containers/lockfree/detail/optional.h
-    include/containers/lockfree/detail/thread_manager.h
     README.md
 )
 
@@ -93,10 +79,6 @@ if(CONTAINERS_ENABLE_BENCHMARK)
         benchmark/evictable_unordered_map.cpp
         benchmark/growable_array.cpp
         benchmark/main.cpp
-        #benchmark/lockfree/atomic.cpp
-        #benchmark/lockfree/counter.cpp
-        #benchmark/lockfree/stack.cpp
-        #benchmark/lockfree/queue.cpp
     )
 
     target_link_libraries(containers_benchmark 
@@ -116,12 +98,8 @@ endif()
 
 if(CONTAINERS_ENABLE_TESTING)
     add_executable(containers_test
-        #test/atomic.cpp
-        #test/counter.cpp
         test/evictable_unordered_map.cpp
-        test/growable_array.cpp        
-        #test/queue.cpp
-        #test/stack.cpp
+        test/growable_array.cpp
     )
 
     add_test(NAME containers_test COMMAND containers_test)
