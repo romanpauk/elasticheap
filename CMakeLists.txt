@@ -64,6 +64,8 @@ add_library(containers INTERFACE)
 target_include_directories(containers INTERFACE include)
 
 target_sources(containers INTERFACE
+    include/containers/allocators/arena_allocator.h
+    include/containers/allocators/page_allocator.h
     include/containers/growable_array.h
     include/containers/evictable_unordered_map.h
     README.md
@@ -76,6 +78,7 @@ if(CONTAINERS_ENABLE_BENCHMARK)
     FetchContent_MakeAvailable(concurrentqueue)
 
     add_executable(containers_benchmark
+        benchmark/arena_allocator.cpp
         benchmark/evictable_unordered_map.cpp
         benchmark/growable_array.cpp
         benchmark/main.cpp
@@ -98,6 +101,7 @@ endif()
 
 if(CONTAINERS_ENABLE_TESTING)
     add_executable(containers_test
+        test/arena_allocator.cpp
         test/evictable_unordered_map.cpp
         test/growable_array.cpp
     )
