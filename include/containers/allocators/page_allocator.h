@@ -11,6 +11,8 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#else
+#include <sys/mman.h>
 #endif
 
 namespace containers {
@@ -49,5 +51,10 @@ template <typename T, typename U>
 bool operator != (const page_allocator<T>& x, const page_allocator<U>& y) noexcept {
     return !(x == y);
 }
+
+template< typename T > struct arena_allocator_traits;
+template< typename T > struct arena_allocator_traits<page_allocator<T>> {
+    static constexpr std::size_t header_size() { return 0; }
+};
 
 }

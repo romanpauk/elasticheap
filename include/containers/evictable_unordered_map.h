@@ -244,6 +244,9 @@ namespace containers {
         values_type values_;
         
     public:
+        evictable_unordered_map() = default;
+        evictable_unordered_map(Allocator allocator): values_(allocator) {}
+
         struct iterator {
             iterator(typename values_type::iterator it): it_(it) {}
 

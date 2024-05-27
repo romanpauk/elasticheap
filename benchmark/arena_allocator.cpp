@@ -18,7 +18,7 @@ template< typename Allocator > static void arena_allocator_allocate(benchmark::S
     static uint8_t buffer[1<<17];
     uintptr_t ptr = 0;
     for (auto _ : state) {
-        containers::arena< Allocator > arena(buffer, sizeof(buffer));
+        containers::arena< Allocator > arena(buffer);
         containers::arena_allocator< Class, decltype(arena) > allocator(arena);
 
         for (size_t i = 0; i < (size_t)state.range(); ++i)

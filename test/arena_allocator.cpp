@@ -12,7 +12,7 @@
 
 TEST(arena_allocator_test, std_allocator) {
     uint8_t buffer[128];
-    containers::arena<> arena(buffer, sizeof(buffer));
+    containers::arena<> arena(buffer);
     containers::arena_allocator< char > allocator(arena);
 
     allocator.allocate(128);
