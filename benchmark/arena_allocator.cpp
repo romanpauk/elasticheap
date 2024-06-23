@@ -50,6 +50,27 @@ template< typename Allocator > static void arena_allocator_allocate_nobuffer(ben
     state.SetItemsProcessed(state.iterations() * state.range());
 }
 
+static void arena_allocator_allocate_uint64_t_arena_only(benchmark::State& state) {
+    static uint8_t buffer[1<<20];
+    
+    auto* arena = reinterpret_cast<containers::arena2< 1<<19, 8, 8 >*>(buffer);
+    new (arena) containers::arena2< 1<<19, 8, 8 >(buffer, sizeof(buffer));
+    std::vector< void* > pointers(state.range());
+        
+    for (auto _ : state) {
+        for(size_t j = 0; j < pointers.size(); ++j)
+            pointers[j] = arena->allocate();
+
+        for(size_t j = 0; j < pointers.size(); ++j)
+            *(uint64_t*)pointers[j] = j;
+
+        for(size_t j = 0; j < pointers.size(); ++j)
+            arena->deallocate(pointers[j]);
+    }
+
+    state.SetItemsProcessed(state.iterations() * state.range());
+}
+
 static void arena_allocator_allocate_uint64_t(benchmark::State& state) {
     containers::arena_allocator2< uint64_t > allocator;
     std::vector< uint64_t* > pointers(state.range());
@@ -91,5 +112,6 @@ BENCHMARK_TEMPLATE(arena_allocator_allocate_nobuffer, std::allocator<char>)->Ran
 BENCHMARK_TEMPLATE(arena_allocator_allocate, containers::page_allocator<char>)->Range(1, 1<<24)->UseRealTime();
 BENCHMARK_TEMPLATE(arena_allocator_allocate_nobuffer, containers::page_allocator<char>)->Range(1, 1<<24)->UseRealTime();
 
+BENCHMARK(arena_allocator_allocate_uint64_t_arena_only)->Range(1, 1<<15)->UseRealTime();
 BENCHMARK(arena_allocator_allocate_uint64_t)->Range(1, 1<<24)->UseRealTime();
 BENCHMARK(allocator_allocate_uint64_t)->Range(1, 1<<24)->UseRealTime();

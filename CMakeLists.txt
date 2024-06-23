@@ -97,6 +97,8 @@ if(CONTAINERS_ENABLE_BENCHMARK)
 
     target_compile_options(containers_benchmark PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:${CONTAINERS_WARNINGS_GCC}>)
     target_compile_options(containers_benchmark PRIVATE $<$<CXX_COMPILER_ID:MSVC>:${CONTAINERS_WARNINGS_MSVC} /bigobj>)
+
+    target_sanitize(CONTAINERS containers_benchmark)
 endif()
 
 if(CONTAINERS_ENABLE_TESTING)
