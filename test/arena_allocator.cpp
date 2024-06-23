@@ -6,6 +6,7 @@
 //
 
 #include <containers/allocators/arena_allocator.h>
+#include <containers/allocators/arena_allocator2.h>
 #include <containers/allocators/page_allocator.h>
 
 #include <gtest/gtest.h>
