@@ -40,17 +40,22 @@ inline bool is_ptr_in_range(void* ptr, std::size_t size, void* begin, void* end)
     return (uintptr_t)ptr >= (uintptr_t)begin && (uintptr_t)ptr + size <= (uintptr_t)end;
 }
 
-template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena2 { 
-    static_assert((ArenaSize & (ArenaSize - 1)) == 0);
-
-    static constexpr std::size_t Count = (ArenaSize - 24 - 4)/(Size + 2);
-    static_assert(Count <= std::numeric_limits<uint16_t>::max());
-
-public:
+struct arena2_metadata {
     uint8_t* begin_;
     uint8_t* ptr_;
     uint8_t* end_;
-    uint32_t  free_list_size_;
+    uint32_t free_list_size_;
+};
+
+template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena2
+    : public arena2_metadata
+{ 
+    static_assert((ArenaSize & (ArenaSize - 1)) == 0);
+
+    static constexpr std::size_t Count = (ArenaSize - sizeof(arena2_metadata))/(Size + 2);
+    static_assert(Count <= std::numeric_limits<uint16_t>::max());
+
+public:
     uint16_t  free_list_[Count];
 
     arena2() = default;
