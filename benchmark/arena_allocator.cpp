@@ -49,12 +49,9 @@ template< typename Allocator > static void arena_allocator_allocate_nobuffer(ben
 }
 
 static void arena_allocator_allocate_uint64_t(benchmark::State& state) {
-    static uint8_t buffer[1<<18];
-    uintptr_t ptr = 0;
     for (auto _ : state) {
-        containers::arena2< uint64_t > arena(buffer);
-        containers::arena_allocator2< uint64_t, decltype(arena) > allocator(arena);
-
+        containers::arena_allocator2< uint64_t > allocator;
+    
         for (size_t i = 0; i < (size_t)state.range(); ++i) {
             uint64_t* p1 = allocator.allocate(1);
             uint64_t* p2 = allocator.allocate(1);
@@ -80,7 +77,6 @@ static void arena_allocator_allocate_uint64_t(benchmark::State& state) {
         }
     }
 
-    benchmark::DoNotOptimize(ptr);
     state.SetItemsProcessed(state.iterations() * state.range() * 6);
 }
 

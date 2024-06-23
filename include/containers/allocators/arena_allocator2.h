@@ -17,156 +17,115 @@
 
 namespace containers {
 
-template< typename T > struct arena_allocator_traits2 {
-    static constexpr std::size_t header_size() { return 32; }
-};
-
-template< typename T, typename Allocator = std::allocator<uint8_t> > class arena2
-    : std::allocator_traits< Allocator >::template rebind_alloc<uint8_t>
-{
-    using allocator_type = typename std::allocator_traits< Allocator >::template rebind_alloc<uint8_t>;
-    using allocator_traits = std::allocator_traits< allocator_type >;
-    
-    static constexpr std::size_t BlockSize = 1 << 18; // 262k
+template< typename T, std::size_t BlockSize > class arena2 { 
     static_assert((BlockSize & (BlockSize - 1)) == 0);
 
     static constexpr std::size_t BlockElements = (BlockSize - 16 - 4)/(sizeof(T) * 2);
     static_assert(BlockElements <= std::numeric_limits<uint16_t>::max());
 
+public:
+    uintptr_t ptr_;
+    uintptr_t end_;
+    uint32_t  free_list_size_;
+    uint16_t  free_list_[BlockElements];
+
+    uintptr_t allocate() {
+        if (free_list_size_) {
+            const uintptr_t begin = reinterpret_cast< uintptr_t >(this) + sizeof(*this);
+            uint16_t index = free_list_[free_list_size_];
+            return begin + index * sizeof(T);
+        }
+    
+        uintptr_t ptr = ptr_;
+        if (ptr + sizeof(T) > end_) {
+            return 0;
+        }
+
+        assert((ptr & (alignof(T) - 1)) == 0);
+        ptr_ += sizeof(T);
+        return ptr;
+    }
+    
+    void deallocate(uintptr_t ptr) {
+        if (ptr + sizeof(T) == ptr_) {
+            ptr_ -= sizeof(T);
+        } else {
+            const uintptr_t begin = reinterpret_cast< uintptr_t >(this) + sizeof(*this);
+            assert(begin <= ptr && ptr < end_);
+            const size_t index = (ptr - begin) / sizeof(T);
+            assert(free_list_size_ < BlockElements);
+            free_list_[free_list_size_++] = index;
+        }
+    }
+};
+
+template <typename T, typename Allocator = std::allocator<void> > class arena_allocator2
+    : std::allocator_traits< Allocator >::template rebind_alloc<uint8_t>
+{
+    template <typename U, typename AllocatorU> friend class arena_allocator2;
+    using block_allocator_type = typename std::allocator_traits< Allocator >::template rebind_alloc<uint8_t>;
+    using block_allocator_traits = std::allocator_traits< block_allocator_type >;
+
+    static constexpr std::size_t BlockSize = 1 << 18; // 262k
+    static_assert((BlockSize & (BlockSize - 1)) == 0);
+    
     struct block {
         block* next;
-        std::size_t size:63;
-        std::size_t owned:1;
-        uint32_t    free_list_size = {0};
-        uint16_t    free_list[BlockElements] = {0};
+        arena2<T, BlockSize> arena;
     };
 
     block* block_ = nullptr;
-    uintptr_t block_ptr_ = 0;
-    uintptr_t block_end_ = 0;
-    
-    static uint64_t round_up(uint64_t n) {
-    #if defined(_WIN32)
-        return n == 1 ? 1 : 1 << (64 - _lzcnt_u64(n - 1));
-    #else
-        return n == 1 ? 1 : 1 << (64 - __builtin_clzl(n - 1));
-    #endif
+
+    void request_block() {
+        auto head = allocate_block();
+        head->next = block_;
+        block_ = head;
     }
 
-    block* allocate_block(std::size_t size) {
-        block *ptr = reinterpret_cast<block*>(allocator_traits::allocate(*this, size));
+    block* allocate_block() {
+        block *ptr = reinterpret_cast<block*>(block_allocator_traits::allocate(*this, BlockSize));
         assert((reinterpret_cast<uintptr_t>(ptr) & (alignof(block) - 1)) == 0);
+        ptr->arena.ptr_ = reinterpret_cast<uintptr_t>(ptr) + sizeof(block);
+        ptr->arena.end_ = reinterpret_cast<uintptr_t>(ptr) + BlockSize;
+        ptr->arena.free_list_size_ = 0;
         return ptr;
     }
 
     void deallocate_block(block* ptr) {
-        assert(ptr->owned);
-        allocator_traits::deallocate(*this, reinterpret_cast<uint8_t*>(ptr), ptr->size);
-    }
-
-    void request_block(std::size_t bytes) {
-        std::size_t size = round_up(std::max(BlockSize, sizeof(block) + bytes + arena_allocator_traits2< allocator_type >::header_size()));
-        assert((size & (size - 1)) == 0);
-        size -= arena_allocator_traits< allocator_type >::header_size();
-        assert((size - sizeof(block)) >= bytes);
-        auto head = allocate_block(size);
-        head->owned = true;
-        head->size = size;
-        push_block(head);
-    }
-
-    void push_block(block* head) {
-        head->next = block_;
-        block_ = head;
-        block_ptr_ = reinterpret_cast<uintptr_t>(block_) + sizeof(block);
-        block_end_ = reinterpret_cast<uintptr_t>(block_) + block_->size;
+        block_allocator_traits::deallocate(*this, reinterpret_cast<uint8_t*>(ptr), BlockSize);
     }
     
-public:
-    arena2() = default;
-
-    template< typename U, std::size_t N > arena2(U(&buffer)[N])
-        : arena2(reinterpret_cast<uint8_t*>(buffer), N * sizeof(U)) {
-        static_assert(std::is_trivial_v<U>);
-        static_assert(N * sizeof(U) > sizeof(block));
-    }
-
-    arena2(uint8_t* buffer, std::size_t size) {
-        assert(size > sizeof(block));
-        auto head = reinterpret_cast<block*>(buffer);
-        head->owned = false;
-        head->size = size;
-        push_block(head);
-    }
-
-    ~arena2() {
-        auto head = block_;
-        while(head) {
-            auto next = head->next;
-            if (head->owned)
-                deallocate_block(head);
-            head = next;
-        }
-    }
-
-    uintptr_t allocate(std::size_t n) {
-        if (block_->free_list_size) {
-            const uintptr_t begin = reinterpret_cast< uintptr_t >(block_) + sizeof(block);
-            uint16_t index = block_->free_list[--block_->free_list_size];
-            return begin + index * sizeof(T);
-        }
-            
-    again:
-        uintptr_t ptr = block_ptr_;
-        if (ptr + sizeof(T) * n > block_end_) {
-            //if (block_->free_list_size) {
-            //    const uintptr_t begin = reinterpret_cast< uintptr_t >(block_) + sizeof(block);
-            //    uint16_t index = block_->free_list[--block_->free_list_size];
-            //    return begin + index * sizeof(T);
-            //}
-        
-            request_block(sizeof(T) * n);
-            goto again;
-        }
-
-        assert((ptr & (alignof(T) - 1)) == 0);
-        block_ptr_ += sizeof(T) * n;
-        return ptr;
-    }
-    
-    void deallocate(uintptr_t ptr, std::size_t n) {
-        if (ptr + sizeof(T) * n == block_ptr_) {
-            block_ptr_ -= sizeof(T) * n;
-        } else
-        {
-            const uintptr_t begin = reinterpret_cast< uintptr_t >(block_) + sizeof(block);
-            const size_t index = (ptr - begin) / sizeof(T);
-            assert(block_->free_list_size < BlockElements);
-            block_->free_list[block_->free_list_size++] = index;
-        }
-    }
-
-    static constexpr std::size_t header_size() { return sizeof(block); }
-};
-
-template <typename T, typename Arena = arena2<T> > class arena_allocator2 {
-    template <typename U, typename ArenaU> friend class arena_allocator2;
-    Arena* arena_ = nullptr;
 public:
     using value_type    = T;
 
-    arena_allocator2(Arena& arena) noexcept
-        : arena_(&arena) {}
+    arena_allocator2() noexcept {
+        request_block();
+    }
 
-    template <typename U> arena_allocator2(const arena_allocator2<U, Arena>& other) noexcept
-        : arena_(other.arena_) {}
-        
+    ~arena_allocator2() {
+        auto head = block_;
+        while(head) {
+            auto next = head->next;
+            deallocate_block(head);
+            head = next;
+        }
+    }
+    
     value_type* allocate(std::size_t n) {
-        return reinterpret_cast<value_type*>(arena_->allocate(n));
+        assert(n == 1);
+        (void)n;
+        auto ptr = reinterpret_cast<value_type*>(block_->arena.allocate());
+        if (!ptr) {
+            request_block();
+            ptr = reinterpret_cast<value_type*>(block_->arena.allocate());
+        }
+        return ptr;
     }
 
     void deallocate(value_type* ptr, std::size_t n) noexcept {
-        arena_->deallocate(reinterpret_cast<uintptr_t>(ptr), n);
+        assert(n == 1);
+        (void)n;
+        block_->arena.deallocate(reinterpret_cast<uintptr_t>(ptr));
     }
 };
 
