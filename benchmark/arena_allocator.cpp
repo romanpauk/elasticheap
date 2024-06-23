@@ -11,6 +11,8 @@
 
 #include <benchmark/benchmark.h>
 
+#include <array>
+
 template< typename Allocator > static void arena_allocator_allocate(benchmark::State& state) {
     struct Class {
         uint8_t data[8];
@@ -49,70 +51,39 @@ template< typename Allocator > static void arena_allocator_allocate_nobuffer(ben
 }
 
 static void arena_allocator_allocate_uint64_t(benchmark::State& state) {
+    containers::arena_allocator2< uint64_t > allocator;
+    std::vector< uint64_t* > pointers(state.range());
+        
     for (auto _ : state) {
-        containers::arena_allocator2< uint64_t > allocator;
-    
-        for (size_t i = 0; i < (size_t)state.range(); ++i) {
-            uint64_t* p1 = allocator.allocate(1);
-            uint64_t* p2 = allocator.allocate(1);
-            uint64_t* p3 = allocator.allocate(1);
-            uint64_t* p4 = allocator.allocate(1);
-            uint64_t* p5 = allocator.allocate(1);
-            uint64_t* p6 = allocator.allocate(1);
-        #if 1        
-            allocator.deallocate(p1, 1);
-            allocator.deallocate(p2, 1);
-            allocator.deallocate(p3, 1);
-            allocator.deallocate(p4, 1);
-            allocator.deallocate(p5, 1);
-            allocator.deallocate(p6, 1); 
-        #else
-            allocator.deallocate(p6, 1);
-            allocator.deallocate(p5, 1);
-            allocator.deallocate(p4, 1);
-            allocator.deallocate(p3, 1);
-            allocator.deallocate(p2, 1);
-            allocator.deallocate(p1, 1);
-        #endif
-        }
+        for(size_t j = 0; j < pointers.size(); ++j)
+            pointers[j] = allocator.allocate(1);
+
+        for(size_t j = 0; j < pointers.size(); ++j)
+            *pointers[j] = j;
+
+        for(size_t j = 0; j < pointers.size(); ++j)
+            allocator.deallocate(pointers[j], 1);
     }
 
-    state.SetItemsProcessed(state.iterations() * state.range() * 6);
+    state.SetItemsProcessed(state.iterations() * state.range());
 }
 
 
 static void allocator_allocate_uint64_t(benchmark::State& state) {
     std::allocator<uint64_t> allocator;
-    uintptr_t ptr = 0;
+    std::vector< uint64_t* > pointers(state.range());
     for (auto _ : state) {
-        for (size_t i = 0; i < (size_t)state.range(); ++i) {
-            uint64_t* p1 = allocator.allocate(1);
-            uint64_t* p2 = allocator.allocate(1);
-            uint64_t* p3 = allocator.allocate(1);
-            uint64_t* p4 = allocator.allocate(1);
-            uint64_t* p5 = allocator.allocate(1);
-            uint64_t* p6 = allocator.allocate(1);
-            
-        #if 1
-            allocator.deallocate(p1, 1);
-            allocator.deallocate(p2, 1);
-            allocator.deallocate(p3, 1);
-            allocator.deallocate(p4, 1);
-            allocator.deallocate(p5, 1);
-            allocator.deallocate(p6, 1);
-        #else
-            allocator.deallocate(p6, 1);
-            allocator.deallocate(p5, 1);
-            allocator.deallocate(p4, 1);
-            allocator.deallocate(p3, 1);
-            allocator.deallocate(p2, 1);
-            allocator.deallocate(p1, 1); 
-        #endif
-        }
+        for(size_t j = 0; j < pointers.size(); ++j)
+            pointers[j] = allocator.allocate(1);
+
+        for(size_t j = 0; j < pointers.size(); ++j)
+            *pointers[j] = j;
+
+        for(size_t j = 0; j < pointers.size(); ++j)
+            allocator.deallocate(pointers[j], 1);
     }
 
-    benchmark::DoNotOptimize(ptr);
-    state.SetItemsProcessed(state.iterations() * state.range() * 6);
+    state.SetItemsProcessed(state.iterations() * state.range());
 }
 
 BENCHMARK_TEMPLATE(arena_allocator_allocate, std::allocator<char>)->Range(1, 1<<24)->UseRealTime();
