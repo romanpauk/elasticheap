@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <memory>
 #include <limits>
+#include <stdexcept>
 
 #if defined(_WIN32)
 #include <immintrin.h>
@@ -86,22 +87,19 @@ public:
         return ptr;
     }
     
-    void deallocate(void* ptr) {
+    bool deallocate(void* ptr) {
         assert(is_ptr_in_range(ptr, Size, begin_, end_));
         assert(is_ptr_aligned(ptr, Alignment));
         
-        if ((uint8_t*)ptr + Size == ptr_) {
-            ptr_ -= Size;
-        } else {
-            size_t index = ((uint8_t*)ptr - begin_) / Size;
-            assert(index < Count);
-            assert(free_list_size_ < Count);
-            free_list_[free_list_size_++] = index;
-        }
+        size_t index = ((uint8_t*)ptr - begin_) / Size;
+        assert(index < Count);
+        assert(free_list_size_ < Count);
+        free_list_[free_list_size_++] = index;
+        return free_list_size_ == Count;
     }
 };
 
-template< std::size_t ArenaSize, std::size_t MaxSize = 1ull << 30 > struct arena_manager {
+template< std::size_t ArenaSize, std::size_t MaxSize = 1ull << 32 > struct arena_manager {
     static_assert((ArenaSize & (ArenaSize - 1)) == 0);
     static constexpr std::size_t ArenaCount = (MaxSize - 16 - ArenaSize + 1)/(ArenaSize + 8);
     
@@ -168,8 +166,10 @@ template <typename T > class arena_allocator2 {
 
     arena_type* allocate_arena() {
         auto arena = reinterpret_cast<arena_type*>(arena_manager_.allocate_arena());
-        if (!arena)
+        if (!arena) {
+            throw std::runtime_error("allocate_arena()");
             return nullptr;
+        }
         
         arena->begin_ = arena->ptr_ = reinterpret_cast<uint8_t*>(arena) + sizeof(*arena);
         arena->end_ = reinterpret_cast<uint8_t*>(arena) + ArenaSize;
@@ -191,8 +191,6 @@ public:
         auto ptr = reinterpret_cast<value_type*>(arena_->allocate());
         if (!ptr) {
             arena_ = allocate_arena();
-            if (!arena_)
-                throw std::bad_alloc();
             ptr = reinterpret_cast<value_type*>(arena_->allocate());
         }
         return ptr;
@@ -202,7 +200,11 @@ public:
         assert(n == 1);
         (void)n;
         auto arena = reinterpret_cast<arena_type*>(arena_manager_.get_arena(ptr));
-        arena->deallocate(ptr);
+        if(arena->deallocate(ptr)) {
+            if (arena_ == arena)
+                arena_ = allocate_arena();
+            arena_manager_.deallocate_arena(arena);
+        }
     }
 };
 

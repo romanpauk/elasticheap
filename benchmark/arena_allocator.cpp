@@ -13,6 +13,8 @@
 
 #include <array>
 
+#define N 24
+
 template< typename Allocator > static void arena_allocator_allocate(benchmark::State& state) {
     struct Class {
         uint8_t data[8];
@@ -54,7 +56,7 @@ static void arena_allocator_allocate_uint64_t_arena_only(benchmark::State& state
     static uint8_t buffer[1<<20];
     
     auto* arena = reinterpret_cast<containers::arena2< 1<<19, 8, 8 >*>(buffer);
-    new (arena) containers::arena2< 1<<19, 8, 8 >(buffer, sizeof(buffer));
+    new (arena) containers::arena2< 1<<19, 8, 8 >();
     std::vector< void* > pointers(state.range());
         
     for (auto _ : state) {
@@ -107,11 +109,11 @@ static void allocator_allocate_uint64_t(benchmark::State& state) {
     state.SetItemsProcessed(state.iterations() * state.range());
 }
 
-BENCHMARK_TEMPLATE(arena_allocator_allocate, std::allocator<char>)->Range(1, 1<<24)->UseRealTime();
-BENCHMARK_TEMPLATE(arena_allocator_allocate_nobuffer, std::allocator<char>)->Range(1, 1<<24)->UseRealTime();
-BENCHMARK_TEMPLATE(arena_allocator_allocate, containers::page_allocator<char>)->Range(1, 1<<24)->UseRealTime();
-BENCHMARK_TEMPLATE(arena_allocator_allocate_nobuffer, containers::page_allocator<char>)->Range(1, 1<<24)->UseRealTime();
+BENCHMARK_TEMPLATE(arena_allocator_allocate, std::allocator<char>)->Range(1, 1<<N)->UseRealTime();
+BENCHMARK_TEMPLATE(arena_allocator_allocate_nobuffer, std::allocator<char>)->Range(1, 1<<N)->UseRealTime();
+BENCHMARK_TEMPLATE(arena_allocator_allocate, containers::page_allocator<char>)->Range(1, 1<<N)->UseRealTime();
+BENCHMARK_TEMPLATE(arena_allocator_allocate_nobuffer, containers::page_allocator<char>)->Range(1, 1<<N)->UseRealTime();
 
-BENCHMARK(arena_allocator_allocate_uint64_t_arena_only)->Range(1, 1<<15)->UseRealTime();
-BENCHMARK(arena_allocator_allocate_uint64_t)->Range(1, 1<<24)->UseRealTime();
-BENCHMARK(allocator_allocate_uint64_t)->Range(1, 1<<24)->UseRealTime();
+//BENCHMARK(arena_allocator_allocate_uint64_t_arena_only)->Range(1, 1<<15)->UseRealTime();
+BENCHMARK(arena_allocator_allocate_uint64_t)->Range(1, 1<<N)->UseRealTime();
+BENCHMARK(allocator_allocate_uint64_t)->Range(1, 1<<N)->UseRealTime();
