@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <array>
 #include <cassert>
 #include <cstdlib>
 #include <memory>
@@ -59,9 +60,7 @@ template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class
 public:
     uint16_t  free_list_[Count];
 
-    arena2() = default;
-
-    arena2(uint8_t*, size_t) {
+    arena2() {
         begin_ = (uint8_t*)this + sizeof(*this);
         ptr_ = begin_;
         end_ = (uint8_t*)this + ArenaSize;
@@ -112,6 +111,8 @@ template< std::size_t ArenaSize, std::size_t MaxSize = 1ull << 32 > struct arena
     memory* memory_;
     
     arena_manager() {
+        //fprintf(stderr, "arena_manager(): sizeof(memory)=%luMB, MaxSize=%luGB\n", sizeof(memory)/1024, MaxSize/1024/1024);
+
         memory_ = (memory*)mmap(0, MaxSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (memory_ == MAP_FAILED)
             std::abort();
@@ -154,44 +155,113 @@ template< std::size_t ArenaSize, std::size_t MaxSize = 1ull << 32 > struct arena
     }
 };
 
-template <typename T > class arena_allocator2 {
-    template <typename U> friend class arena_allocator2;
-    
+class arena_allocator_base {
     static constexpr std::size_t ArenaSize = 1 << 18; // 18: 262k
     static_assert((ArenaSize & (ArenaSize - 1)) == 0);
-    
-    arena_manager<ArenaSize> arena_manager_;
-    using arena_type = arena2<ArenaSize, sizeof(T), alignof(T) >;
-    arena_type* arena_;
 
-    arena_type* allocate_arena() {
-        auto arena = reinterpret_cast<arena_type*>(arena_manager_.allocate_arena());
-        if (!arena) {
-            throw std::runtime_error("allocate_arena()");
-            return nullptr;
+protected:
+    static arena_manager<ArenaSize> arena_manager_;
+    
+    static constexpr uint32_t round_up(uint32_t v) {
+        v--;
+        v |= v >> 1;
+        v |= v >> 2;
+        v |= v >> 4;
+        v |= v >> 8;
+        v |= v >> 16;
+        v++;
+        return v;
+    }
+
+    static constexpr size_t log2(size_t n) { return ((n<2) ? 1 : 1 + log2(n/2)); }
+
+    static constexpr size_t size_class(size_t n) { return round_up(std::max(n, 8lu)); }
+
+    template< typename T > static constexpr size_t size_class() { 
+        size_t n = round_up(std::max(sizeof(T), 8lu));
+        if (n > 8)
+            if (n - n/2 >= sizeof(T)) return n - n/2;
+        return n;
+    }
+
+    static constexpr size_t size_class_offset(size_t n) {
+        switch(n) {
+        case 8:     return 0;
+        case 12:    return 1;
+        case 16:    return 2;
+        case 24:    return 3;
+        case 32:    return 4;
+        case 48:    return 5;
+        case 64:    return 6;
+        case 96:    return 7;
+        case 128:   return 8;
+        case 224:   return 9;
+        case 256:   return 10;
+        case 384:   return 11;
+        case 512:   return 12;
+        case 768:   return 13;
+        case 1024:  return 14;
+        case 1536:  return 15;
+        case 2048:  return 16;
+        case 3072:  return 17;
+        case 4096:  return 18;
+        case 6144:  return 19;
+        case 8192:  return 20;
+        case 12288: return 21;
+        case 16384: return 22;
+        default:
+            std::abort();
         }
-        
-        arena->begin_ = arena->ptr_ = reinterpret_cast<uint8_t*>(arena) + sizeof(*arena);
-        arena->end_ = reinterpret_cast<uint8_t*>(arena) + ArenaSize;
-        arena->free_list_size_ = 0;
+    }
+
+    template< size_t SizeClass > arena2<ArenaSize, SizeClass, 8>* get_arena() {
+        auto offset = size_class_offset(SizeClass);
+        return (arena2<ArenaSize, SizeClass, 8>*)classes_[offset];
+    }
+
+    template< size_t SizeClass > arena2<ArenaSize, SizeClass, 8>* get_arena(void* ptr) {
+        return (arena2<ArenaSize, SizeClass, 8>*)arena_manager_.get_arena(ptr);
+    }
+
+    template< size_t SizeClass > arena2<ArenaSize, SizeClass, 8>* allocate_arena() {
+        auto offset = size_class_offset(SizeClass);
+        void* ptr = arena_manager_.allocate_arena();
+        auto* arena = new (ptr) arena2<ArenaSize, SizeClass, 8>;
+        classes_[offset] = arena;
         return arena;
     }
+
+    template< size_t SizeClass > void deallocate_arena(void* ptr) {
+        auto offset = size_class_offset(SizeClass);
+        if (classes_[offset] == ptr)
+            classes_[offset] = allocate_arena<SizeClass>();
+        arena_manager_.deallocate_arena(ptr);
+    }
+
+    static std::array<void*, 23> classes_;
+};
+
+std::array<void*, 23> arena_allocator_base::classes_;
+arena_manager<1<<18> arena_allocator_base::arena_manager_;
+
+//thread_local arena2<1<<18, 8, 8 >* arena_allocator_base::arena_;
+
+template <typename T > class arena_allocator2: public arena_allocator_base {
+    template <typename U> friend class arena_allocator2;
     
 public:
     using value_type    = T;
 
     arena_allocator2() noexcept {
-        arena_ = allocate_arena();
-        assert(arena_);
+        allocate_arena<size_class<T>()>();
     }
     
     value_type* allocate(std::size_t n) {
         assert(n == 1);
         (void)n;
-        auto ptr = reinterpret_cast<value_type*>(arena_->allocate());
+        auto ptr = reinterpret_cast<value_type*>(get_arena<size_class<T>()>()->allocate());
         if (!ptr) {
-            arena_ = allocate_arena();
-            ptr = reinterpret_cast<value_type*>(arena_->allocate());
+            ptr = reinterpret_cast<value_type*>(allocate_arena<size_class<T>()>()->allocate());
         }
         return ptr;
     }
@@ -199,11 +269,9 @@ public:
     void deallocate(value_type* ptr, std::size_t n) noexcept {
         assert(n == 1);
         (void)n;
-        auto arena = reinterpret_cast<arena_type*>(arena_manager_.get_arena(ptr));
+        auto arena = get_arena<size_class<T>()>(ptr);
         if(arena->deallocate(ptr)) {
-            if (arena_ == arena)
-                arena_ = allocate_arena();
-            arena_manager_.deallocate_arena(arena);
+            deallocate_arena<size_class<T>()>(arena);
         }
     }
 };
