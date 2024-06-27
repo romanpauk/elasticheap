@@ -10,8 +10,9 @@
 #include <array>
 #include <cassert>
 #include <cstdlib>
-#include <memory>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
 
 #if defined(_WIN32)
@@ -98,59 +99,149 @@ public:
     }
 };
 
-template< std::size_t ArenaSize, std::size_t MaxSize = 1ull << 32 > struct arena_manager {
-    static_assert((ArenaSize & (ArenaSize - 1)) == 0);
-    static constexpr std::size_t ArenaCount = (MaxSize - 16 - ArenaSize + 1)/(ArenaSize + 8);
-    
-    struct memory {
-        uint64_t size_ = 0;
-        uint64_t free_list_size_ = 0;
-        void* free_list_[ArenaCount];
-    };
-    
-    memory* memory_;
-    
-    arena_manager() {
-        //fprintf(stderr, "arena_manager(): sizeof(memory)=%luMB, MaxSize=%luGB\n", sizeof(memory)/1024, MaxSize/1024/1024);
+template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
+    static constexpr std::size_t PageCount = MaxSize / PageSize;
 
-        memory_ = (memory*)mmap(0, MaxSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    page_manager() {
+        memory_ = (uint8_t*)mmap(0, MaxSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (memory_ == MAP_FAILED)
             std::abort();
-
-        memory_->size_ = 0;
-        memory_->free_list_size_ = 0;
     }
 
-    ~arena_manager() {
+    ~page_manager() {
         munmap(memory_, MaxSize);
     }
 
-    void* allocate_arena() {
+    void* allocate_page() {
         void* ptr = 0;
-        if (memory_->free_list_size_) {
-            ptr = memory_->free_list_[--memory_->free_list_size_];
-        } else {
-            if (memory_->size_ == ArenaCount)
-                return nullptr;
-            ptr = (void*)((((uintptr_t)(memory_) + sizeof(memory) + ArenaSize - 1) & ~(ArenaSize - 1)) + memory_->size_++ * ArenaSize);
+        {
+            std::lock_guard lock(mutex_);
+            
+            if (free_list_size_) {
+                ptr = free_list_[--free_list_size_];
+            } else {
+                ptr = (void*)((((uintptr_t)(memory_) + PageSize - 1) & ~(PageSize - 1)) + size_++ * PageSize);
+            }
         }
 
-        assert(is_ptr_in_range(ptr, ArenaSize, memory_ + 1, (uint8_t*)memory_ + MaxSize));
+        assert(is_ptr_in_range(ptr, PageSize, begin(), end()));
+        assert(is_ptr_aligned(ptr, PageSize));
+
+        mprotect(ptr, PageSize, PROT_READ | PROT_WRITE);
+        return ptr;
+    }
+
+    void deallocate_page(void* ptr) {
+        assert(is_ptr_in_range(ptr, PageSize, begin(), end()));
+        assert(is_ptr_aligned(ptr, PageSize));
+        
+        mprotect(ptr, PageSize, PROT_NONE);
+
+        std::lock_guard lock(mutex_);
+        assert(free_list_size_ < PageCount);
+        free_list_[free_list_size_++] = ptr;
+    }
+
+    void* begin() { return memory_; }
+    void* end() { return (uint8_t*)memory_ + MaxSize; }
+
+    std::mutex mutex_;
+    uint64_t size_ = 0;
+    uint64_t free_list_size_ = 0;
+    void* memory_ = 0;
+    void* free_list_[PageCount];
+};
+
+template< std::size_t ArenaSize, std::size_t MaxSize = 1ull << 32 > struct arena_manager {
+    static_assert((ArenaSize & (ArenaSize - 1)) == 0);
+    static constexpr std::size_t PageSize = 1<<21;
+    static constexpr std::size_t PageArenaCount = (PageSize)/(ArenaSize);
+    
+    struct free_stack {
+        static constexpr std::size_t capacity = (PageSize - sizeof(16))/sizeof(void*); 
+        free_stack* next_ = 0;
+        uint64_t size_ = 0;
+        void* data_[];
+    };
+    
+    //static_assert(sizeof(free_stack) <= PageSize);
+
+    page_manager<PageSize, MaxSize> page_manager_;
+    free_stack* free_stack_;
+
+    void* arena_page_;
+    std::size_t arena_page_size_;
+
+    free_stack* allocate_free_stack() {
+        auto ptr = (free_stack*)page_manager_.allocate_page();
+        new (ptr) free_stack();
+        return ptr;
+    }
+
+    void free_stack_push(void* ptr) {
+        if (free_stack_->size_ == free_stack::capacity) {
+            auto stack = allocate_free_stack();
+            stack->next_ = free_stack_;
+            free_stack_ = stack;
+        }
+
+        free_stack_->data_[free_stack_->size_++] = ptr;
+    }
+
+    void* free_stack_pop() {
+        if (free_stack_->size_ == 0) {
+            if (free_stack_->next_) {
+                auto next = free_stack_->next_;
+                page_manager_.deallocate_page(free_stack_);
+                free_stack_ = next;
+            } else {
+                return nullptr;
+            }
+        }
+
+        return free_stack_->data_[--free_stack_->size_];
+    }
+
+    arena_manager() {
+        free_stack_ = allocate_free_stack();
+        arena_page_ = page_manager_.allocate_page();
+        arena_page_size_ = 0;
+    }
+
+    ~arena_manager() {
+        do {
+            auto next = free_stack_->next_;
+            page_manager_.deallocate_page(free_stack_);
+            free_stack_ = next;
+        } while(free_stack_);
+
+        page_manager_.deallocate_page(arena_page_);
+    }
+
+    void* allocate_arena() {
+        void* ptr = free_stack_pop();
+        if (!ptr) {
+            if (arena_page_size_ == PageArenaCount) {
+                arena_page_ = page_manager_.allocate_page();
+                arena_page_size_ = 0;
+            }
+
+            ptr = (void*)((((uintptr_t)(arena_page_) + ArenaSize - 1) & ~(ArenaSize - 1)) + arena_page_size_++ * ArenaSize);
+            assert(is_ptr_in_range(ptr, ArenaSize, arena_page_, (uint8_t*)arena_page_ + PageSize));
+        }
+
         assert(is_ptr_aligned(ptr, ArenaSize));
         return ptr;
     }
 
     void deallocate_arena(void* ptr) {
-        assert(is_ptr_in_range(ptr, ArenaSize, memory_ + 1, (uint8_t*)memory_ + MaxSize));
+        assert(is_ptr_in_range(ptr, ArenaSize, page_manager_.begin(), page_manager_.end()));
         assert(is_ptr_aligned(ptr, ArenaSize));
-        assert(memory_->free_list_size_ < ArenaCount);
-
-        memory_->free_list_[memory_->free_list_size_++] = ptr;
+        free_stack_push(ptr);
     }
 
     void* get_arena(void* ptr) {
-        assert(is_ptr_in_range(ptr, 1, memory_ + 1, (uint8_t*)memory_ + MaxSize));
-        
+        assert(is_ptr_in_range(ptr, 1, page_manager_.begin(), page_manager_.end()));
         return reinterpret_cast<void*>((uintptr_t)ptr & ~(ArenaSize - 1));
     }
 };
