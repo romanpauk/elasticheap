@@ -95,6 +95,7 @@ public:
         return free_list_size_ == Count;
     }
 
+private:
     bool is_ptr_valid(void* ptr) {
         assert(is_ptr_in_range(ptr, Size, begin_, end_));
         assert(is_ptr_aligned(ptr, Alignment));
@@ -178,23 +179,24 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
         deallocated_pages_.push(ptr);
     }
 
-    void* begin() { return memory_; }
-    void* end() { return (uint8_t*)memory_ + MaxSize; }
-
-    bool is_page_valid(void* ptr) {
-        assert(is_ptr_in_range(ptr, PageSize, begin(), end()));
-        assert(is_ptr_aligned(ptr, PageSize));
-        return true;
-    }
-
-    std::size_t get_page_index(void* ptr) {
+    std::size_t get_page_index(void* ptr) const {
         assert(is_page_valid(ptr));
         return ((uint8_t*)ptr - (uint8_t*)memory_) / PageSize;
     }
 
-    void* get_page(void* ptr) {
+    void* get_page(void* ptr) const {
         assert(is_ptr_in_range(ptr, 1, begin(), end()));
         return reinterpret_cast<void*>((uintptr_t)ptr & ~(PageSize - 1));
+    }
+
+    void* begin() const { return memory_; }
+    void* end() const { return (uint8_t*)memory_ + MaxSize; }
+
+private:
+    bool is_page_valid(void* ptr) const {
+        assert(is_ptr_in_range(ptr, PageSize, begin(), end()));
+        assert(is_ptr_aligned(ptr, PageSize));
+        return true;
     }
 
     void* memory_ = 0;
@@ -212,10 +214,10 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
 
     void* allocate_arena() {
         while(true) {
-            if (arenas_.empty())
-                allocate_page();
+            if (arena_cache_.empty())
+                allocate_arena_cache();
             
-            void* ptr = arenas_.pop();
+            void* ptr = arena_cache_.pop();
             void* page = page_manager_.get_page(ptr);
             auto& metadata = metadata_[page_manager_.get_page_index(page)];
             if (metadata.allocated) {
@@ -226,7 +228,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         }
     }
 
-    void* get_arena(void* ptr) {
+    void* get_arena(void* ptr) const {
         assert(is_ptr_in_range(ptr, 1, page_manager_.begin(), page_manager_.end()));
         return reinterpret_cast<void*>((uintptr_t)ptr & ~(ArenaSize - 1));
     }
@@ -239,11 +241,12 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
             metadata.allocated = false;
             page_manager_.deallocate_page(page);
         } else {
-            arenas_.push(ptr);
+            arena_cache_.push(ptr);
         }
     }
 
-    void allocate_page() {
+private:
+    void allocate_arena_cache() {
         void* page = page_manager_.allocate_page();
         auto& metadata = metadata_[page_manager_.get_page_index(page)];
         metadata.refs = 0;
@@ -256,17 +259,17 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
             arenas[i] = arena;
         }
 
-        arenas_.push(arenas);
+        arena_cache_.push(arenas);
     }
 
-    bool is_arena_valid(void* ptr) {
+    bool is_arena_valid(void* ptr) const {
         assert(is_ptr_in_range(ptr, ArenaSize, page_manager_.begin(), page_manager_.end()));
         assert(is_ptr_aligned(ptr, ArenaSize));
         return true;
     }
 
     page_manager< PageSize, MaxSize > page_manager_;
-    heap< void*, ArenaCount > arenas_;
+    heap< void*, ArenaCount > arena_cache_;
     
     struct page_metadata {
         bool allocated;
