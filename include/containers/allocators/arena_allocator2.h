@@ -236,7 +236,7 @@ private:
 template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
     static constexpr std::size_t MmapSize = MaxSize + PageSize - 1;
     static constexpr std::size_t PageCount = MaxSize / PageSize;
-    static_assert(PageCount < std::numeric_limits< uint32_t >::max());
+    static_assert(PageCount <= std::numeric_limits< uint32_t >::max());
 
     struct page_metadata {
         bool allocated; // TODO: get rid of allocated, allocate_arena() needs to change
@@ -329,12 +329,14 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
     static constexpr std::size_t ArenaCount = MaxSize/ArenaSize;
     static constexpr std::size_t PageCount = MaxSize/PageSize;
 
+    static_assert(ArenaCount <= std::numeric_limits<uint32_t>::max());
+
     void* allocate_arena() {
         while(true) {
             if (arena_cache_.empty())
                 allocate_arena_cache();
             
-            void* ptr = arena_cache_.pop();
+            void* ptr = get_arena(arena_cache_.pop());
             void* page = page_manager_.get_page(ptr);
             auto& metadata = page_manager_.get_page_metadata(page);
             if (metadata.allocated) {
@@ -350,6 +352,17 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         return mask<ArenaSize>(ptr);
     }
 
+    void* get_arena(uint32_t index) const {
+        void* ptr = (uint8_t*)page_manager_.begin() + ArenaSize * index;
+        assert(is_arena_valid(ptr));
+        return ptr;
+    }
+
+    uint32_t get_arena_index(void* ptr) const {
+        assert(is_arena_valid(ptr));
+        return ((uint8_t*)ptr - (uint8_t*)page_manager_.begin()) / ArenaSize;
+    }
+
     void deallocate_arena(void* ptr) {
         assert(is_arena_valid(ptr));
         void* page = page_manager_.get_page(ptr);
@@ -358,7 +371,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
             metadata.allocated = false;
             page_manager_.deallocate_page(page);
         } else {
-            arena_cache_.push(ptr);
+            arena_cache_.push(get_arena_index(ptr));
         }
     }
 
@@ -369,11 +382,11 @@ private:
         metadata.refs = 0;
         metadata.allocated = true;
 
-        std::array< void*, PageArenaCount > arenas;
+        std::array< uint32_t, PageArenaCount > arenas;
         for (size_t i = 0; i < arenas.size(); ++i) {
             void* arena = (uint8_t*)page + i * ArenaSize;
             assert(is_arena_valid(arena));
-            arenas[i] = arena;
+            arenas[i] = get_arena_index(arena);
         }
 
         arena_cache_.push(arenas);
@@ -386,8 +399,8 @@ private:
     }
 
     page_manager< PageSize, MaxSize > page_manager_;
-    heap< void*, ArenaCount > arena_cache_;
-    //elastic_heap< void*, ArenaCount > arena_cache_;
+    heap< uint32_t, ArenaCount > arena_cache_;
+    //elastic_heap< uint32_t, ArenaCount > arena_cache_;
 };
 
 class arena_allocator_base {
