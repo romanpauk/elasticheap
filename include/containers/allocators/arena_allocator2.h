@@ -403,17 +403,14 @@ private:
     //elastic_heap< uint32_t, ArenaCount > arena_cache_;
 };
 
-class arena_allocator_base {
-    static constexpr std::size_t PageSize = 1<<21;
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > class arena_allocator_base {
     static_assert((PageSize & (PageSize - 1)) == 0);
-
-    static constexpr std::size_t ArenaSize = 1 << 18; // 18: 262k    
     static_assert((ArenaSize & (ArenaSize - 1)) == 0);
+    static_assert((MaxSize & (MaxSize - 1)) == 0);
 
     static constexpr std::size_t PageArenaCount = (PageSize)/(ArenaSize);
     
-protected:
-    
+protected:    
     static constexpr uint32_t round_up(uint32_t v) {
         v--;
         v |= v >> 1;
@@ -491,13 +488,15 @@ protected:
     }
 
     static std::array<void*, 23> classes_;
-    static arena_manager<1<<21, 1<<18, 1ull<<32> arena_manager_;
+    static arena_manager<PageSize, ArenaSize, MaxSize> arena_manager_;
 };
 
-std::array<void*, 23> arena_allocator_base::classes_;
-arena_manager<1<<21, 1<<18, 1ull<<32> arena_allocator_base::arena_manager_;
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<void*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_;
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> arena_manager<PageSize, ArenaSize, MaxSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::arena_manager_;
 
-template <typename T > class arena_allocator2: public arena_allocator_base {
+template <typename T > class arena_allocator2
+    : public arena_allocator_base< 1<<21, 1<<19, 1ull<<32> 
+{
     template <typename U> friend class arena_allocator2;
     
 public:
