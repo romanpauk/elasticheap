@@ -35,6 +35,10 @@
     } while(0);
 #endif
 
+//#define PAGE_MANAGER_ELASTIC
+//#define ARENA_MANAGER_ELASTIC
+//#define ARENA_ALLOCATOR_BASE_ELASTIC
+
 namespace containers {
 
 inline bool is_ptr_aligned(void* ptr, std::size_t alignment) {
@@ -143,6 +147,17 @@ template< typename T, std::size_t Capacity, typename Compare = std::greater<> > 
         return values_[0];
     }
 
+    void erase(T value) {
+        for(size_t i = 0; i < size_; ++i) {
+            if (values_[i] == value) {
+                values_[i] = values_[--size_];
+                std::make_heap(values_, values_ + size_, Compare{});
+                return;
+            }
+        }
+
+        assert(false);
+    }
 private:
     std::size_t size_ = 0;
     T values_[Capacity];
@@ -168,6 +183,11 @@ template< typename T, std::size_t Size, std::size_t PageSize = 4096 > struct ela
         return *(memory_ + size_ - 1);
     }
 
+    T& operator[](size_t n) {
+        assert(n < size_);
+        return *(memory_ + n);
+    }
+
     void emplace_back(T value) {
         grow();
         *(memory_ + size_) = value;
@@ -179,6 +199,8 @@ template< typename T, std::size_t Size, std::size_t PageSize = 4096 > struct ela
         --size_;
         shrink();
     }
+
+    std::size_t size() const { return size_; }
 
 private:
     void grow() {
@@ -229,6 +251,18 @@ template< typename T, std::size_t Size, typename Compare = std::greater<> > stru
         return values_[0];
     }
 
+    void erase(T value) {
+        for(size_t i = 0; i < values_.size(); ++i) {
+            if (values_[i] == value) {
+                values_[i] = values_.back();
+                values_.pop_back();
+                std::make_heap(values_.begin(), values_.end(), Compare{});
+                return;
+            }
+        }
+
+        assert(false);
+    }
 private:
     elastic_array<T, Size> values_;
 };
@@ -317,8 +351,12 @@ private:
     uint64_t memory_size_ = 0;
     
     std::mutex mutex_;
+
+#if defined(PAGE_MANAGER_ELASTIC)
+    elastic_heap< uint32_t, PageCount > deallocated_pages_;
+#else
     heap< uint32_t, PageCount > deallocated_pages_;
-    //elastic_heap< uint32_t, PageCount > deallocated_pages_;
+#endif
     
     page_metadata metadata_[PageCount];
 };
@@ -399,8 +437,12 @@ private:
     }
 
     page_manager< PageSize, MaxSize > page_manager_;
+
+#if defined(ARENA_MANAGER_ELASTIC)
+    elastic_heap< uint32_t, ArenaCount > arena_cache_;
+#else
     heap< uint32_t, ArenaCount > arena_cache_;
-    //elastic_heap< uint32_t, ArenaCount > arena_cache_;
+#endif
 };
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > class arena_allocator_base {
@@ -465,7 +507,11 @@ protected:
 
     template< size_t SizeClass > arena2<ArenaSize, SizeClass, 8>* get_arena() {
         auto offset = size_class_offset(SizeClass);
+    #if defined(ARENA_ALLOCATOR_BASE_HEAP)
+        return (arena2<ArenaSize, SizeClass, 8>*)classes_[offset].top();
+    #else
         return (arena2<ArenaSize, SizeClass, 8>*)classes_[offset];
+    #endif
     }
 
     template< size_t SizeClass > arena2<ArenaSize, SizeClass, 8>* get_arena(void* ptr) {
@@ -476,22 +522,46 @@ protected:
         auto offset = size_class_offset(SizeClass);
         void* ptr = arena_manager_.allocate_arena();
         auto* arena = new (ptr) arena2<ArenaSize, SizeClass, 8>;
+    #if defined(ARENA_ALLOCATOR_BASE_HEAP)
+        classes_[offset].push(arena);
+    #else
         classes_[offset] = arena;
+    #endif
         return arena;
     }
 
     template< size_t SizeClass > void deallocate_arena(void* ptr) {
         auto offset = size_class_offset(SizeClass);
-        if (classes_[offset] == ptr)
-            classes_[offset] = allocate_arena<SizeClass>();
-        arena_manager_.deallocate_arena(ptr);
+    #if defined(ARENA_ALLOCATOR_BASE_HEAP)
+        if (classes_[offset].top() != ptr) {
+            classes_[offset].erase(ptr);
+            arena_manager_.deallocate_arena(ptr);
+        }
+    #else
+        if (classes_[offset] != ptr) {
+            arena_manager_.deallocate_arena(ptr);
+        }
+    #endif
     }
 
+#if defined(ARENA_ALLOCATOR_BASE_ELASTIC)
+    static std::array<elastic_heap<void*, MaxSize/ArenaSize>, 23> classes_;
+#else
     static std::array<void*, 23> classes_;
+#endif
     static arena_manager<PageSize, ArenaSize, MaxSize> arena_manager_;
 };
 
+#if defined(ARENA_ALLOCATOR_BASE_HEAP)
+#if defined(ARENA_ALLOCATOR_BASE_ELASTIC)
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<elastic_heap<void*, MaxSize/ArenaSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_;
+#else
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<heap<void*, MaxSize/ArenaSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_;
+#endif
+#else
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<void*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_;
+#endif
+
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> arena_manager<PageSize, ArenaSize, MaxSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::arena_manager_;
 
 template <typename T > class arena_allocator2
