@@ -225,9 +225,10 @@ private:
 
 template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
     static constexpr std::size_t PageCount = MaxSize / PageSize;
+    static_assert(PageCount < std::numeric_limits< uint32_t >::max());
 
     struct page_metadata {
-        bool allocated;
+        bool allocated; // TODO: get rid of allocated, allocate_arena() needs to change
         uint8_t refs;
     };
 
@@ -247,7 +248,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
             std::lock_guard lock(mutex_);
 
             if (!deallocated_pages_.empty()) {
-                ptr = deallocated_pages_.pop();
+                ptr = get_page(deallocated_pages_.pop());
             } else {
                 if (memory_size_ == PageCount)
                     std::abort();
@@ -265,12 +266,18 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
         mprotect(ptr, PageSize, PROT_NONE);
 
         std::lock_guard lock(mutex_);
-        deallocated_pages_.push(ptr);
+        deallocated_pages_.push(get_page_index(ptr));
     }
 
     void* get_page(void* ptr) const {
         assert(is_ptr_in_range(ptr, 1, begin(), end()));
         return reinterpret_cast<void*>((uintptr_t)ptr & ~(PageSize - 1));
+    }
+
+    void* get_page(uint32_t index) const {
+        void* ptr = (uint8_t*)memory_ + index * PageSize;
+        assert(is_page_valid(ptr));
+        return ptr;
     }
 
     void* begin() const { return memory_; }
@@ -281,7 +288,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
     }
 
 private:
-    std::size_t get_page_index(void* ptr) const {
+    uint32_t get_page_index(void* ptr) const {
         assert(is_page_valid(ptr));
         return ((uint8_t*)ptr - (uint8_t*)memory_) / PageSize;
     }
@@ -296,8 +303,8 @@ private:
     uint64_t memory_size_ = 0;
     
     std::mutex mutex_;
-    heap< void*, PageCount > deallocated_pages_;
-    //elastic_heap< void*, PageCount > deallocated_pages_;
+    heap< uint32_t, PageCount > deallocated_pages_;
+    //elastic_heap< uint32_t, PageCount > deallocated_pages_;
     
     page_metadata metadata_[PageCount];
 };
