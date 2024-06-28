@@ -103,11 +103,11 @@ private:
     }
 };
 
-template< typename T, std::size_t Capacity > struct heap {
+template< typename T, std::size_t Capacity, typename Compare = std::greater<> > struct heap {
     void push(T value) {
         assert(size_ < Capacity);
         values_[size_++] = value;
-        std::make_heap(values_, values_ + size_); 
+        std::make_heap(values_, values_ + size_, Compare{}); 
     }
 
     template< size_t N > void push(const std::array<T, N>& values) {
@@ -115,7 +115,7 @@ template< typename T, std::size_t Capacity > struct heap {
             assert(size_ < Capacity);
             values_[size_++] = values[i];
         }
-        std::make_heap(values_, values_ + size_); 
+        std::make_heap(values_, values_ + size_, Compare{}); 
     }
 
     bool empty() const {
@@ -124,7 +124,7 @@ template< typename T, std::size_t Capacity > struct heap {
 
     T pop() {
         T value = top();
-        std::pop_heap(values_, values_ + size_);
+        std::pop_heap(values_, values_ + size_, Compare{});
         --size_;
         return value;
     }
