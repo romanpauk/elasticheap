@@ -37,6 +37,7 @@
 
 //#define PAGE_MANAGER_ELASTIC
 //#define ARENA_MANAGER_ELASTIC
+//#define ARENA_ALLOCATOR_BASE_HEAP
 //#define ARENA_ALLOCATOR_BASE_ELASTIC
 
 namespace containers {
@@ -544,8 +545,12 @@ protected:
     #endif
     }
 
+#if defined(ARENA_ALLOCATOR_BASE_HEAP)
 #if defined(ARENA_ALLOCATOR_BASE_ELASTIC)
     static std::array<elastic_heap<void*, MaxSize/ArenaSize>, 23> classes_;
+#else
+    static std::array<heap<void*, MaxSize/ArenaSize>, 23> classes_;    
+#endif
 #else
     static std::array<void*, 23> classes_;
 #endif
