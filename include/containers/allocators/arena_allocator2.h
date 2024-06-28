@@ -45,6 +45,16 @@ inline bool is_ptr_in_range(void* ptr, std::size_t size, void* begin, void* end)
     return (uintptr_t)ptr >= (uintptr_t)begin && (uintptr_t)ptr + size <= (uintptr_t)end;
 }
 
+template < std::size_t Alignment, typename T > T* align(T* ptr) {
+    static_assert((Alignment & (Alignment - 1)) == 0);
+    return (T*)(((uintptr_t)ptr + Alignment - 1) & ~(Alignment - 1));
+}
+
+template < std::size_t Alignment, typename T > T* mask(T* ptr) {
+    static_assert((Alignment & (Alignment - 1)) == 0);
+    return (T*)((uintptr_t)ptr & ~(Alignment - 1));
+}
+
 struct arena2_metadata {
     uint8_t* begin_;
     uint8_t* ptr_;
@@ -224,6 +234,7 @@ private:
 };
 
 template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
+    static constexpr std::size_t MmapSize = MaxSize + PageSize - 1;
     static constexpr std::size_t PageCount = MaxSize / PageSize;
     static_assert(PageCount < std::numeric_limits< uint32_t >::max());
 
@@ -233,13 +244,15 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
     };
 
     page_manager() {
-        memory_ = (uint8_t*)mmap(0, MaxSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (memory_ == MAP_FAILED)
+        mmap_ = (uint8_t*)mmap(0, MmapSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (mmap_ == MAP_FAILED)
             std::abort();
+
+        memory_ = align<PageSize>(mmap_);
     }
 
     ~page_manager() {
-        munmap(memory_, MaxSize);
+        munmap(mmap_, MmapSize);
     }
 
     void* allocate_page() {
@@ -252,7 +265,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
             } else {
                 if (memory_size_ == PageCount)
                     std::abort();
-                ptr = (void*)((((uintptr_t)(memory_) + PageSize - 1) & ~(PageSize - 1)) + memory_size_++ * PageSize);
+                ptr = (uint8_t*)memory_ + memory_size_++ * PageSize;
             }
         }
 
@@ -271,7 +284,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
 
     void* get_page(void* ptr) const {
         assert(is_ptr_in_range(ptr, 1, begin(), end()));
-        return reinterpret_cast<void*>((uintptr_t)ptr & ~(PageSize - 1));
+        return mask<PageSize>(ptr);
     }
 
     void* get_page(uint32_t index) const {
@@ -281,7 +294,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
     }
 
     void* begin() const { return memory_; }
-    void* end() const { return (uint8_t*)memory_ + MaxSize; }
+    void* end() const { return (uint8_t*)memory_ + PageSize * PageCount; }
 
     page_metadata& get_page_metadata(void* page) {
         return metadata_[get_page_index(page)];
@@ -299,6 +312,7 @@ private:
         return true;
     }
 
+    void* mmap_ = 0;
     void* memory_ = 0;
     uint64_t memory_size_ = 0;
     
@@ -333,7 +347,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
 
     void* get_arena(void* ptr) const {
         assert(is_ptr_in_range(ptr, 1, page_manager_.begin(), page_manager_.end()));
-        return reinterpret_cast<void*>((uintptr_t)ptr & ~(ArenaSize - 1));
+        return mask<ArenaSize>(ptr);
     }
 
     void deallocate_arena(void* ptr) {
