@@ -154,6 +154,7 @@ template< typename T, std::size_t Capacity, typename Compare = std::greater<> > 
     }
 
     void erase(T value) {
+        assert(!empty());
         for(size_t i = 0; i < size_; ++i) {
             if (values_[i] == value) {
                 values_[i] = values_[--size_];
@@ -170,6 +171,9 @@ private:
 };
 
 template< typename T, std::size_t Size, std::size_t PageSize = 4096 > struct elastic_array {
+    using size_type = uint32_t;
+    static_assert(sizeof(T) * Size < std::numeric_limits<size_type>::max());
+
     elastic_array() {
         memory_ = (T*)mmap(0, sizeof(T) * Size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (memory_ == MAP_FAILED)
@@ -182,6 +186,7 @@ template< typename T, std::size_t Size, std::size_t PageSize = 4096 > struct ela
 
     T* begin() { return memory_; }
     T* end() { return memory_ + size_; }
+
     bool empty() const { return size_ == 0; }
     
     T& back() {
@@ -189,15 +194,21 @@ template< typename T, std::size_t Size, std::size_t PageSize = 4096 > struct ela
         return *(memory_ + size_ - 1);
     }
 
-    T& operator[](size_t n) {
+    T& operator[](size_type n) {
         assert(n < size_);
         return *(memory_ + n);
     }
 
     void emplace_back(T value) {
         grow();
-        *(memory_ + size_) = value;
-        ++size_;
+        *(memory_ + size_++) = value;
+    }
+
+    void emplace_back(T* begin, T* end) {
+        grow(end - begin);
+        while(begin != end) {
+            *(memory_ + size_++) = *begin++;
+        }
     }
 
     void pop_back() {
@@ -206,27 +217,27 @@ template< typename T, std::size_t Size, std::size_t PageSize = 4096 > struct ela
         shrink();
     }
 
-    std::size_t size() const { return size_; }
+    size_type size() const { return size_; }
 
 private:
-    void grow() {
-        if ((size_ * sizeof(T) / PageSize) + 1 > pages_) {
-            mprotect((uint8_t*)memory_ + PageSize * pages_, PageSize, PROT_READ | PROT_WRITE);
-            ++pages_;
+    void grow(size_type n = 1) {
+        if (size_ + n > size_commited_) {
+            mprotect((uint8_t*)memory_ + size_commited_ * sizeof(T), PageSize, PROT_READ | PROT_WRITE);
+            size_commited_ += PageSize/sizeof(T);
         }
     }
 
     void shrink() {
-        assert(pages_ > 0);
-        if ((size_ * sizeof(T) / PageSize) + 1 < pages_) {
-            mprotect((uint8_t*)memory_ + PageSize * (pages_ - 1), PageSize, PROT_NONE);
-            --pages_;
+        assert(size_ > 0);
+        if (size_ + PageSize/sizeof(T) < size_commited_) {
+            mprotect((uint8_t*)memory_ + size_commited_ * sizeof(T) - PageSize/sizeof(T), PageSize, PROT_NONE);
+            size_commited_ -= PageSize/sizeof(T);
         }
     }
 
     T* memory_ = 0;
-    std::size_t size_ = 0;
-    std::size_t pages_ = 0;
+    size_type size_ = 0;
+    size_type size_commited_ = 0;
 };
 
 template< typename T, std::size_t Size, typename Compare = std::greater<> > struct elastic_heap {
@@ -236,9 +247,7 @@ template< typename T, std::size_t Size, typename Compare = std::greater<> > stru
     }
 
     template< size_t N > void push(const std::array<T, N>& values) {
-        for(size_t i = 0; i < values.size(); ++i) {
-            values_.emplace_back(values[i]);
-        }
+        values_.emplace_back(values.begin(), values.end());
         std::make_heap(values_.begin(), values_.end(), Compare{}); 
     }
 
