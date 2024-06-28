@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstdlib>
@@ -58,9 +59,9 @@ template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class
     static constexpr std::size_t Count = (ArenaSize - sizeof(arena2_metadata))/(Size + 2);
     static_assert(Count <= std::numeric_limits<uint16_t>::max());
 
-public:
     uint16_t  free_list_[Count];
-
+    
+public:
     arena2() {
         begin_ = (uint8_t*)this + sizeof(*this);
         ptr_ = begin_;
@@ -81,22 +82,60 @@ public:
             ptr_ += Size;
         }
 
-        assert(is_ptr_in_range(ptr, Size, begin_, end_)); 
-        assert(is_ptr_aligned(ptr, Alignment));
-           
+        assert(is_ptr_valid(ptr));
         return ptr;
     }
     
     bool deallocate(void* ptr) {
-        assert(is_ptr_in_range(ptr, Size, begin_, end_));
-        assert(is_ptr_aligned(ptr, Alignment));
-        
+        assert(is_ptr_valid(ptr));
         size_t index = ((uint8_t*)ptr - begin_) / Size;
         assert(index < Count);
         assert(free_list_size_ < Count);
         free_list_[free_list_size_++] = index;
         return free_list_size_ == Count;
     }
+
+    bool is_ptr_valid(void* ptr) {
+        assert(is_ptr_in_range(ptr, Size, begin_, end_));
+        assert(is_ptr_aligned(ptr, Alignment));
+        return true;
+    }
+};
+
+template< typename T, std::size_t Capacity > struct heap {
+    void push(T value) {
+        assert(size_ < Capacity);
+        values_[size_++] = value;
+        std::make_heap(values_, values_ + size_); 
+    }
+
+    template< size_t N > void push(const std::array<T, N>& values) {
+        for(size_t i = 0; i < values.size(); ++i) {
+            assert(size_ < Capacity);
+            values_[size_++] = values[i];
+        }
+        std::make_heap(values_, values_ + size_); 
+    }
+
+    bool empty() const {
+        return size_ == 0;
+    }
+
+    T pop() {
+        T value = top();
+        std::pop_heap(values_, values_ + size_);
+        --size_;
+        return value;
+    }
+
+    T& top() {
+        assert(!empty());
+        return values_[0];
+    }
+
+private:
+    std::size_t size_ = 0;
+    T values_[Capacity];
 };
 
 template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
@@ -116,142 +155,92 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
         void* ptr = 0;
         {
             std::lock_guard lock(mutex_);
-            
-            if (free_list_size_) {
-                ptr = free_list_[--free_list_size_];
+
+            if (!deallocated_pages_.empty()) {
+                ptr = deallocated_pages_.pop();
             } else {
-                ptr = (void*)((((uintptr_t)(memory_) + PageSize - 1) & ~(PageSize - 1)) + size_++ * PageSize);
+                if (memory_size_ == PageCount)
+                    std::abort();
+                ptr = (void*)((((uintptr_t)(memory_) + PageSize - 1) & ~(PageSize - 1)) + memory_size_++ * PageSize);
             }
         }
 
-        assert(is_ptr_in_range(ptr, PageSize, begin(), end()));
-        assert(is_ptr_aligned(ptr, PageSize));
-
+        assert(is_page_valid(ptr));
         mprotect(ptr, PageSize, PROT_READ | PROT_WRITE);
         return ptr;
     }
 
     void deallocate_page(void* ptr) {
-        assert(is_ptr_in_range(ptr, PageSize, begin(), end()));
-        assert(is_ptr_aligned(ptr, PageSize));
-        
+        assert(is_page_valid(ptr));
         mprotect(ptr, PageSize, PROT_NONE);
 
         std::lock_guard lock(mutex_);
-        assert(free_list_size_ < PageCount);
-        free_list_[free_list_size_++] = ptr;
+        deallocated_pages_.insert(ptr);
     }
 
     void* begin() { return memory_; }
     void* end() { return (uint8_t*)memory_ + MaxSize; }
 
-    std::mutex mutex_;
-    uint64_t size_ = 0;
-    uint64_t free_list_size_ = 0;
+    bool is_page_valid(void* ptr) {
+        assert(is_ptr_in_range(ptr, PageSize, begin(), end()));
+        assert(is_ptr_aligned(ptr, PageSize));
+        return true;
+    }
+
     void* memory_ = 0;
-    void* free_list_[PageCount];
+    uint64_t memory_size_ = 0;
+    
+    std::mutex mutex_;
+    heap< void*, PageCount > deallocated_pages_;
 };
 
-template< std::size_t ArenaSize, std::size_t MaxSize = 1ull << 32 > struct arena_manager {
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > struct arena_manager {
     static_assert((ArenaSize & (ArenaSize - 1)) == 0);
-    static constexpr std::size_t PageSize = 1<<21;
     static constexpr std::size_t PageArenaCount = (PageSize)/(ArenaSize);
-    
-    struct free_stack {
-        static constexpr std::size_t capacity = (PageSize - sizeof(16))/sizeof(void*); 
-        free_stack* next_ = 0;
-        uint64_t size_ = 0;
-        void* data_[];
-    };
-    
-    //static_assert(sizeof(free_stack) <= PageSize);
-
-    page_manager<PageSize, MaxSize> page_manager_;
-    free_stack* free_stack_;
-
-    void* arena_page_;
-    std::size_t arena_page_size_;
-
-    free_stack* allocate_free_stack() {
-        auto ptr = (free_stack*)page_manager_.allocate_page();
-        new (ptr) free_stack();
-        return ptr;
-    }
-
-    void free_stack_push(void* ptr) {
-        if (free_stack_->size_ == free_stack::capacity) {
-            auto stack = allocate_free_stack();
-            stack->next_ = free_stack_;
-            free_stack_ = stack;
-        }
-
-        free_stack_->data_[free_stack_->size_++] = ptr;
-    }
-
-    void* free_stack_pop() {
-        if (free_stack_->size_ == 0) {
-            if (free_stack_->next_) {
-                auto next = free_stack_->next_;
-                page_manager_.deallocate_page(free_stack_);
-                free_stack_ = next;
-            } else {
-                return nullptr;
-            }
-        }
-
-        return free_stack_->data_[--free_stack_->size_];
-    }
-
-    arena_manager() {
-        free_stack_ = allocate_free_stack();
-        arena_page_ = page_manager_.allocate_page();
-        arena_page_size_ = 0;
-    }
-
-    ~arena_manager() {
-        do {
-            auto next = free_stack_->next_;
-            page_manager_.deallocate_page(free_stack_);
-            free_stack_ = next;
-        } while(free_stack_);
-
-        page_manager_.deallocate_page(arena_page_);
-    }
+    static constexpr std::size_t ArenaCount = MaxSize/ArenaSize;
 
     void* allocate_arena() {
-        void* ptr = free_stack_pop();
-        if (!ptr) {
-            if (arena_page_size_ == PageArenaCount) {
-                arena_page_ = page_manager_.allocate_page();
-                arena_page_size_ = 0;
-            }
-
-            ptr = (void*)((((uintptr_t)(arena_page_) + ArenaSize - 1) & ~(ArenaSize - 1)) + arena_page_size_++ * ArenaSize);
-            assert(is_ptr_in_range(ptr, ArenaSize, arena_page_, (uint8_t*)arena_page_ + PageSize));
+        if (arenas_.empty()) {
+            allocate_arenas();
         }
 
-        assert(is_ptr_aligned(ptr, ArenaSize));
-        return ptr;
-    }
-
-    void deallocate_arena(void* ptr) {
-        assert(is_ptr_in_range(ptr, ArenaSize, page_manager_.begin(), page_manager_.end()));
-        assert(is_ptr_aligned(ptr, ArenaSize));
-        free_stack_push(ptr);
+        return arenas_.pop();
     }
 
     void* get_arena(void* ptr) {
         assert(is_ptr_in_range(ptr, 1, page_manager_.begin(), page_manager_.end()));
         return reinterpret_cast<void*>((uintptr_t)ptr & ~(ArenaSize - 1));
     }
+
+    void deallocate_arena(void* ptr) {
+        arenas_.push(ptr);
+
+        // TODO: we need to know that the whole page is empty to deallocate it
+    }
+
+    void allocate_arenas() {
+        void* page = page_manager_.allocate_page();
+        std::array< void*, PageArenaCount > arenas;
+        for (size_t i = 0; i < arenas.size(); ++i)
+            arenas[i] = (uint8_t*)page + i * ArenaSize;
+
+        arenas_.push(arenas);
+    }
+
+    page_manager< PageSize, MaxSize > page_manager_;
+    heap< void*, ArenaCount > arenas_;
 };
 
 class arena_allocator_base {
-    static constexpr std::size_t ArenaSize = 1 << 18; // 18: 262k
+    static constexpr std::size_t PageSize = 1<<21;
+    static_assert((PageSize & (PageSize - 1)) == 0);
+
+    static constexpr std::size_t ArenaSize = 1 << 18; // 18: 262k    
     static_assert((ArenaSize & (ArenaSize - 1)) == 0);
 
+    static constexpr std::size_t PageArenaCount = (PageSize)/(ArenaSize);
+    
 protected:
-    static arena_manager<ArenaSize> arena_manager_;
     
     static constexpr uint32_t round_up(uint32_t v) {
         v--;
@@ -330,12 +319,11 @@ protected:
     }
 
     static std::array<void*, 23> classes_;
+    static arena_manager<1<<21, 1<<18, 1ull<<32> arena_manager_;
 };
 
 std::array<void*, 23> arena_allocator_base::classes_;
-arena_manager<1<<18> arena_allocator_base::arena_manager_;
-
-//thread_local arena2<1<<18, 8, 8 >* arena_allocator_base::arena_;
+arena_manager<1<<21, 1<<18, 1ull<<32> arena_allocator_base::arena_manager_;
 
 template <typename T > class arena_allocator2: public arena_allocator_base {
     template <typename U> friend class arena_allocator2;
