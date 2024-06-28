@@ -138,7 +138,60 @@ private:
     T values_[Capacity];
 };
 
-template< typename T, typename Compare = std::greater<> > struct dynamic_heap {
+template< typename T, std::size_t Size, std::size_t PageSize = 4096 > struct elastic_array {
+    elastic_array() {
+        memory_ = (T*)mmap(0, sizeof(T) * Size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (memory_ == MAP_FAILED)
+            std::abort();
+    }
+
+    ~elastic_array() {
+        munmap(memory_, sizeof(T) * Size);
+    }
+
+    T* begin() { return memory_; }
+    T* end() { return memory_ + size_; }
+    bool empty() const { return size_ == 0; }
+    
+    T& back() {
+        assert(!empty());
+        return *(memory_ + size_ - 1);
+    }
+
+    void emplace_back(T value) {
+        grow();
+        *(memory_ + size_) = value;
+        ++size_;
+    }
+
+    void pop_back() {
+        assert(!empty());
+        --size_;
+        shrink();
+    }
+
+private:
+    void grow() {
+        if ((size_ * sizeof(T) / PageSize) + 1 > pages_) {
+            mprotect((uint8_t*)memory_ + PageSize * pages_, PageSize, PROT_READ | PROT_WRITE);
+            ++pages_;
+        }
+    }
+
+    void shrink() {
+        assert(pages_ > 0);
+        if ((size_ * sizeof(T) / PageSize) + 1 < pages_) {
+            mprotect((uint8_t*)memory_ + PageSize * (pages_ - 1), PageSize, PROT_NONE);
+            --pages_;
+        }
+    }
+
+    T* memory_ = 0;
+    std::size_t size_ = 0;
+    std::size_t pages_ = 0;
+};
+
+template< typename T, std::size_t Size, typename Compare = std::greater<> > struct elastic_heap {
     void push(T value) {
         values_.emplace_back(value);
         std::push_heap(values_.begin(), values_.end(), Compare{}); 
@@ -167,7 +220,7 @@ template< typename T, typename Compare = std::greater<> > struct dynamic_heap {
     }
 
 private:
-    std::deque<T> values_;
+    elastic_array<T, Size> values_;
 };
 
 template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
@@ -244,7 +297,8 @@ private:
     
     std::mutex mutex_;
     heap< void*, PageCount > deallocated_pages_;
-
+    //elastic_heap< void*, PageCount > deallocated_pages_;
+    
     page_metadata metadata_[PageCount];
 };
 
@@ -312,7 +366,7 @@ private:
 
     page_manager< PageSize, MaxSize > page_manager_;
     heap< void*, ArenaCount > arena_cache_;
-    //dynamic_heap< void* > arena_cache_;
+    //elastic_heap< void*, ArenaCount > arena_cache_;
 };
 
 class arena_allocator_base {
