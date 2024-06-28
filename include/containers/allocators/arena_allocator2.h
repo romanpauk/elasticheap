@@ -11,6 +11,7 @@
 #include <array>
 #include <cassert>
 #include <cstdlib>
+#include <deque>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -107,7 +108,7 @@ template< typename T, std::size_t Capacity, typename Compare = std::greater<> > 
     void push(T value) {
         assert(size_ < Capacity);
         values_[size_++] = value;
-        std::make_heap(values_, values_ + size_, Compare{}); 
+        std::push_heap(values_, values_ + size_, Compare{}); 
     }
 
     template< size_t N > void push(const std::array<T, N>& values) {
@@ -123,10 +124,8 @@ template< typename T, std::size_t Capacity, typename Compare = std::greater<> > 
     }
 
     T pop() {
-        T value = top();
         std::pop_heap(values_, values_ + size_, Compare{});
-        --size_;
-        return value;
+        return values_[--size_];
     }
 
     T& top() {
@@ -137,6 +136,38 @@ template< typename T, std::size_t Capacity, typename Compare = std::greater<> > 
 private:
     std::size_t size_ = 0;
     T values_[Capacity];
+};
+
+template< typename T, typename Compare = std::greater<> > struct dynamic_heap {
+    void push(T value) {
+        values_.emplace_back(value);
+        std::push_heap(values_.begin(), values_.end(), Compare{}); 
+    }
+
+    template< size_t N > void push(const std::array<T, N>& values) {
+        for(size_t i = 0; i < values.size(); ++i) {
+            values_.emplace_back(values[i]);
+        }
+        std::make_heap(values_.begin(), values_.end(), Compare{}); 
+    }
+
+    bool empty() const {
+        return values_.empty();
+    }
+
+    T pop() {
+        std::pop_heap(values_.begin(), values_.end(), Compare{});
+        T value = values_.back();
+        values_.pop_back();
+        return value;
+    }
+
+    T& top() {
+        return values_[0];
+    }
+
+private:
+    std::deque<T> values_;
 };
 
 template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
@@ -270,6 +301,7 @@ private:
 
     page_manager< PageSize, MaxSize > page_manager_;
     heap< void*, ArenaCount > arena_cache_;
+    //dynamic_heap< void* > arena_cache_;
     
     struct page_metadata {
         bool allocated;
