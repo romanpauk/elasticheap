@@ -13,7 +13,7 @@
 
 #include <array>
 
-#define N 24
+#define N 26
 
 template< typename Allocator > static void arena_allocator_allocate(benchmark::State& state) {
     struct Class {
@@ -90,7 +90,9 @@ static void arena_allocator_allocate_uint64_t(benchmark::State& state) {
 
     state.SetItemsProcessed(state.iterations() * state.range());
 
+#if defined(STATS)
     containers::print_stats();
+#endif
 }
 
 static void arena_allocator_allocate_sizes(benchmark::State& state) {
@@ -143,7 +145,9 @@ static void arena_allocator_allocate_sizes(benchmark::State& state) {
 
     state.SetItemsProcessed(state.iterations() * state.range() * 4);
 
+#if defined(STATS)
     containers::print_stats();
+#endif
 }
 
 void allocator_allocate_sizes(benchmark::State& state) {
