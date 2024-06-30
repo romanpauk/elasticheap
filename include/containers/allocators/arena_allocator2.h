@@ -36,7 +36,7 @@
 #endif
 
 //#define STATS
-#define PAGE_MANAGER_ELASTIC
+//#define PAGE_MANAGER_ELASTIC
 //#define ARENA_MANAGER_ELASTIC
 #define ARENA_ALLOCATOR_BASE_HEAP
 #define ARENA_ALLOCATOR_BASE_ELASTIC
@@ -117,11 +117,15 @@ public:
         }
 
         assert(is_ptr_valid(ptr));
+        assert(size_ < Count);
         ++size_;
+
+        //fprintf(stderr, "arena2 %p allocate %p, size %u\n", this, ptr, size_);
         return ptr;
     }
     
     void deallocate(void* ptr) {
+        //fprintf(stderr, "arena2 %p deallocate %p size %u\n", this, ptr, size_);
         assert(is_ptr_valid(ptr));
         size_t index = ((uint8_t*)ptr - begin_) / Size;
         assert(index < Count);
@@ -319,7 +323,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
 
     struct page_metadata {
         uint8_t state; // TODO: get rid of allocated, allocate_arena() needs to change
-        uint8_t refs;
+        uint8_t bitmap;
     };
 
     page_manager() {
@@ -391,12 +395,12 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
         return metadata_[get_page_index(page)];
     }
 
-private:
     uint32_t get_page_index(void* ptr) const {
         assert(is_page_valid(ptr));
         return ((uint8_t*)ptr - (uint8_t*)memory_) / PageSize;
     }
 
+private:
     bool is_page_valid(void* ptr) const {
         assert(is_ptr_in_range(ptr, PageSize, begin(), end()));
         assert(is_ptr_aligned(ptr, PageSize));
@@ -420,19 +424,57 @@ private:
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > struct arena_manager {
     static_assert((ArenaSize & (ArenaSize - 1)) == 0);
+
     static constexpr std::size_t ArenaCount = MaxSize/ArenaSize;
-    
+    static constexpr std::size_t PageCount = MaxSize/PageSize;
+
     static_assert(ArenaCount <= std::numeric_limits<uint32_t>::max());
 
+    void* get_allocated_page() {
+        void* page = 0;
+        if (allocated_pages_.empty()) {
+            page = page_manager_.allocate_page();
+            auto& metadata = page_manager_.get_page_metadata(page);
+            metadata.bitmap = 0;
+            metadata.state = Allocated;    
+            allocated_pages_.push(page_manager_.get_page_index(page));
+        } else {
+            page = page_manager_.get_page(allocated_pages_.top());
+        }
+        return page;
+    }
+
     void* allocate_arena() {
-        void* ptr = page_manager_.allocate_page();
-        auto& metadata = page_manager_.get_page_metadata(ptr);
-        metadata.state = Allocated;
-        assert(is_arena_valid(ptr));
+    again:
+        void* page = get_allocated_page();
+        auto& metadata = page_manager_.get_page_metadata(page);
+        if (metadata.state == Deallocated) {
+            allocated_pages_.pop();
+            goto again;
+        }
+
+        assert(metadata.bitmap != 255);
+        assert(metadata.state == Allocated);
+        
+        void* arena = 0;
+        for (size_t i = 0; i < 8; ++i) {
+            if ((metadata.bitmap & (1 << i)) == 0) {
+                metadata.bitmap |= 1 << i;
+                arena = (uint8_t*)page + ArenaSize * i;
+                //fprintf(stderr, "allocate_arena() page %p provided arena %p at index %lu\n", page, arena, i);
+                if (metadata.bitmap == 255) {
+                    allocated_pages_.pop();
+                }
+                break;
+            }
+        }
+
+        assert(is_arena_valid(arena));
+
     #if defined(STATS)
         ++stats.arenas_allocated;
     #endif
-        return ptr;
+        return arena;
     }
 
     void* get_arena(void* ptr) const {
@@ -455,19 +497,32 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         assert(is_arena_valid(ptr));
         void* page = page_manager_.get_page(ptr);
         auto& metadata = page_manager_.get_page_metadata(page);
-        metadata.state = Deallocated;
-        page_manager_.deallocate_page(page);
-    
+        assert(metadata.state == Allocated);
+
+        if (metadata.bitmap == 255) {
+            allocated_pages_.push(page_manager_.get_page_index(page));
+        }
+
+        int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
+        metadata.bitmap &= ~(1 << index);
+        //fprintf(stderr, "deallocate_arena() page %p returned arena %p at index %d\n", page, ptr, index);
+        if (metadata.bitmap == 0) {        
+            metadata.state = Deallocated;
+            page_manager_.deallocate_page(page);
+        }
+
     #if defined(STATS)
         --stats.arenas_allocated;
     #endif
     }
 
-    uint8_t get_arena_state(void* ptr) {
+    bool get_arena_state(void* ptr) {
         assert(is_arena_valid(ptr));
         void* page = page_manager_.get_page(ptr);
         auto& metadata = page_manager_.get_page_metadata(page);
-        return metadata.state;
+        int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
+        return metadata.state == Allocated 
+            && ((metadata.bitmap & (1<<index)) == 1); // TODO: the bug
     }
 
 private:
@@ -481,9 +536,9 @@ private:
     page_manager< PageSize, MaxSize > page_manager_;
 
 #if defined(ARENA_MANAGER_ELASTIC)
-    elastic_heap< uint32_t, ArenaCount > arena_cache_;
+    elastic_heap< uint32_t, PageCount > allocated_pages_;
 #else
-    heap< uint32_t, ArenaCount > arena_cache_;
+    heap< uint32_t, PageCount > allocated_pages_;
 #endif
 };
 
@@ -550,10 +605,12 @@ protected:
     template< size_t SizeClass > void* allocate_impl() {
     again:
         auto arena = get_arena<SizeClass>();
-        if (arena_manager_.get_arena_state(arena) == Allocated) {
+        if (arena_manager_.get_arena_state(arena)) {
             auto ptr = arena->allocate();
-            if (ptr)
+            if (ptr) {
+                //fprintf(stderr, "allocate_impl: arena %p allocated %p (reused, size %lu, capacity %lu)\n", arena, ptr, arena->size(), arena->capacity());
                 return ptr;
+            }
 
             assert(arena->size() == arena->capacity());
         }
@@ -563,11 +620,16 @@ protected:
         if(get_size<SizeClass>())
             goto again;
 
-        return allocate_arena<SizeClass>()->allocate();
+        arena = allocate_arena<SizeClass>();
+        assert(arena->size() == 0);
+        auto ptr = arena->allocate();
+        //fprintf(stderr, "allocate_impl: arena %p allocated %p (new)\n", arena, ptr);
+        return ptr;
     }
 
     template< size_t SizeClass > void deallocate_impl(void* ptr) noexcept {
         auto arena = get_arena<SizeClass>(ptr);
+        //fprintf(stderr, "deallocate_impl: arena %p deallocating %p\n", arena, ptr);
         arena->deallocate(ptr);
         if(arena->size() == 0) {
             deallocate_arena<SizeClass>(arena);
@@ -579,8 +641,8 @@ protected:
     template< size_t SizeClass > arena2<ArenaSize, SizeClass, 8>* get_arena() {
         auto offset = size_class_offset(SizeClass);
     #if defined(ARENA_ALLOCATOR_BASE_HEAP)
-        if (get_size<SizeClass>() == 0)
-            allocate_arena<SizeClass>();
+        //if (get_size<SizeClass>() == 0)
+        //    allocate_arena<SizeClass>();
         return (arena2<ArenaSize, SizeClass, 8>*)classes_[offset].top();
     #else
         return (arena2<ArenaSize, SizeClass, 8>*)classes_[offset];
@@ -665,7 +727,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std:
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> arena_manager<PageSize, ArenaSize, MaxSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::arena_manager_;
 
 template <typename T > class arena_allocator2
-    : public arena_allocator_base< 1<<21, 1<<19, 1ull<<40> 
+    : public arena_allocator_base< 1<<21, 1<<18, 1ull<<40> 
 {
     template <typename U> friend class arena_allocator2;
     
