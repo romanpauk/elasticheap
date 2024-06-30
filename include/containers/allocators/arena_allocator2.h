@@ -35,12 +35,28 @@
     } while(0);
 #endif
 
+#define STATS
 //#define PAGE_MANAGER_ELASTIC
 //#define ARENA_MANAGER_ELASTIC
-//#define ARENA_ALLOCATOR_BASE_HEAP
-//#define ARENA_ALLOCATOR_BASE_ELASTIC
+#define ARENA_ALLOCATOR_BASE_HEAP
+#define ARENA_ALLOCATOR_BASE_ELASTIC
 
 namespace containers {
+
+struct allocator_stats {
+    std::size_t pages_allocated = 0;
+    std::size_t pages_deallocated_heap_size = 0;
+    std::size_t arenas_allocated = 0;
+    std::size_t arenas_deallocated_heap_size = 0;
+};
+
+static allocator_stats stats;
+
+void print_stats() {
+    fprintf(stderr, "stats: pages_allocated %lu, pages_deallocated_heap_size %lu, arenas_allocated %lu, arenas_deallocated_heap_size %lu\n",
+        stats.pages_allocated, stats.pages_deallocated_heap_size, stats.arenas_allocated, stats.arenas_deallocated_heap_size
+    );
+}
 
 inline bool is_ptr_aligned(void* ptr, std::size_t alignment) {
     return ((uintptr_t)ptr & (alignment - 1)) == 0;
@@ -165,6 +181,9 @@ template< typename T, std::size_t Capacity, typename Compare = std::greater<> > 
 
         assert(false);
     }
+
+    std::size_t size() const { return size_; }
+
 private:
     std::size_t size_ = 0;
     T values_[Capacity];
@@ -228,7 +247,6 @@ private:
     }
 
     void shrink() {
-        assert(size_ > 0);
         if (size_ + PageSize/sizeof(T) < size_commited_) {
             mprotect((uint8_t*)memory_ + size_commited_ * sizeof(T) - PageSize/sizeof(T), PageSize, PROT_NONE);
             size_commited_ -= PageSize/sizeof(T);
@@ -323,6 +341,9 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
 
         assert(is_page_valid(ptr));
         mprotect(ptr, PageSize, PROT_READ | PROT_WRITE);
+    #if defined(STATS)
+        ++stats.pages_allocated;
+    #endif
         return ptr;
     }
 
@@ -332,6 +353,10 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
 
         std::lock_guard lock(mutex_);
         deallocated_pages_.push(get_page_index(ptr));
+    #if defined(STATS)
+        --stats.pages_allocated;
+        stats.pages_deallocated_heap_size = deallocated_pages_.size();
+    #endif
     }
 
     void* get_page(void* ptr) const {
@@ -398,6 +423,9 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
             if (metadata.allocated) {
                 ++metadata.refs;
                 assert(is_arena_valid(ptr));
+            #if defined(STATS)
+                ++stats.arenas_allocated;
+            #endif
                 return ptr;
             }
         }
@@ -428,7 +456,14 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
             page_manager_.deallocate_page(page);
         } else {
             arena_cache_.push(get_arena_index(ptr));
+        #if defined(STATS)
+            stats.arenas_deallocated_heap_size = arena_cache_.size();
+        #endif
         }
+
+        #if defined(STATS)
+            --stats.arenas_allocated;
+        #endif
     }
 
 private:
@@ -526,6 +561,8 @@ protected:
     template< size_t SizeClass > arena2<ArenaSize, SizeClass, 8>* get_arena() {
         auto offset = size_class_offset(SizeClass);
     #if defined(ARENA_ALLOCATOR_BASE_HEAP)
+        if (classes_[offset].size() == 0)
+            allocate_arena<SizeClass>();
         return (arena2<ArenaSize, SizeClass, 8>*)classes_[offset].top();
     #else
         return (arena2<ArenaSize, SizeClass, 8>*)classes_[offset];
@@ -560,11 +597,11 @@ protected:
     template< size_t SizeClass > void deallocate_arena(void* ptr) {
         auto offset = size_class_offset(SizeClass);
     #if defined(ARENA_ALLOCATOR_BASE_HEAP)
-        if (classes_[offset].top() != ptr) {
+        //if (classes_[offset].top() != ptr) {
             classes_[offset].erase(ptr);
             arena_manager_.deallocate_arena(ptr);
-            allocate_arena<SizeClass>();
-        }
+            //allocate_arena<SizeClass>();
+        //}
     #else
         if (classes_[offset] != ptr) {
             arena_manager_.deallocate_arena(ptr);

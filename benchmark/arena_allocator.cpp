@@ -89,6 +89,8 @@ static void arena_allocator_allocate_uint64_t(benchmark::State& state) {
     }
 
     state.SetItemsProcessed(state.iterations() * state.range());
+
+    containers::print_stats();
 }
 
 static void arena_allocator_allocate_sizes(benchmark::State& state) {
@@ -140,6 +142,8 @@ static void arena_allocator_allocate_sizes(benchmark::State& state) {
     }
 
     state.SetItemsProcessed(state.iterations() * state.range() * 4);
+
+    containers::print_stats();
 }
 
 void allocator_allocate_sizes(benchmark::State& state) {
