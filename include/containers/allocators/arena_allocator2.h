@@ -278,6 +278,9 @@ template< typename T, std::size_t Size, typename Compare = std::greater<> > stru
 
         assert(false);
     }
+
+    auto size() const { return values_.size(); }
+
 private:
     elastic_array<T, Size> values_;
 };
@@ -529,6 +532,15 @@ protected:
     #endif
     }
 
+    template< size_t SizeClass > size_t get_size() {
+    #if defined(ARENA_ALLOCATOR_BASE_HEAP)
+        auto offset = size_class_offset(SizeClass);
+        return classes_[offset].size();
+    #else
+        return 0;
+    #endif
+    }
+
     template< size_t SizeClass > arena2<ArenaSize, SizeClass, 8>* get_arena(void* ptr) {
         return (arena2<ArenaSize, SizeClass, 8>*)arena_manager_.get_arena(ptr);
     }
@@ -614,6 +626,7 @@ public:
     value_type* allocate(std::size_t n) {
         assert(n == 1);
         (void)n;
+    again:
         auto arena = get_arena<size_class<T>()>();
         auto ptr = reinterpret_cast<value_type*>(arena->allocate());
         if (ptr)
@@ -621,6 +634,10 @@ public:
 
         assert(arena->size() == arena->capacity());
         pop_arena<size_class<T>()>();
+
+        if(get_size<size_class<T>()>())
+            goto again;
+
         return reinterpret_cast<value_type*>(allocate_arena<size_class<T>()>()->allocate());
     }
 
