@@ -465,6 +465,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
                 if (metadata.bitmap == 255) {
                     allocated_pages_.pop();
                 }
+                
                 break;
             }
         }
@@ -521,8 +522,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         void* page = page_manager_.get_page(ptr);
         auto& metadata = page_manager_.get_page_metadata(page);
         int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
-        return metadata.state == Allocated 
-            && ((metadata.bitmap & (1<<index)) == 1); // TODO: the bug
+        return (metadata.bitmap & (1<<index));
     }
 
 private:
@@ -677,6 +677,7 @@ protected:
     template< size_t SizeClass > void deallocate_arena(void* ptr) {
         auto offset = size_class_offset(SizeClass);
     #if defined(ARENA_ALLOCATOR_BASE_HEAP)
+        // TODO
         if (classes_[offset].top() != ptr) {
             arena_manager_.deallocate_arena(ptr);
         }
