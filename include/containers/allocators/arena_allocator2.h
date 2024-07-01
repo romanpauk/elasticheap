@@ -427,6 +427,9 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
 
     static constexpr std::size_t ArenaCount = MaxSize/ArenaSize;
     static constexpr std::size_t PageCount = MaxSize/PageSize;
+    static constexpr std::size_t PageArenaCount = PageSize/ArenaSize;
+
+    static constexpr std::size_t PageBitmapFull = (1 << PageArenaCount) - 1;
 
     static_assert(ArenaCount <= std::numeric_limits<uint32_t>::max());
 
@@ -453,7 +456,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
             goto again;
         }
 
-        assert(metadata.bitmap != 255);
+        assert(metadata.bitmap != PageBitmapFull);
         assert(metadata.state == Allocated);
         
         void* arena = 0;
@@ -462,7 +465,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
                 metadata.bitmap |= 1 << i;
                 arena = (uint8_t*)page + ArenaSize * i;
                 //fprintf(stderr, "allocate_arena() page %p provided arena %p at index %lu\n", page, arena, i);
-                if (metadata.bitmap == 255) {
+                if (metadata.bitmap == PageBitmapFull) {
                     allocated_pages_.pop();
                 }
                 
@@ -500,7 +503,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         auto& metadata = page_manager_.get_page_metadata(page);
         assert(metadata.state == Allocated);
 
-        if (metadata.bitmap == 255) {
+        if (metadata.bitmap == PageBitmapFull) {
             allocated_pages_.push(page_manager_.get_page_index(page));
         }
 
@@ -641,8 +644,6 @@ protected:
     #if defined(ARENA_ALLOCATOR_BASE_HEAP)
         if (classes_cache_[offset])
             return (arena2<ArenaSize, SizeClass, 8>*)classes_cache_[offset];
-        //if (get_size<SizeClass>() == 0)
-        //    allocate_arena<SizeClass>();
     again:
         void* arena = classes_[offset].top();
         if (arena_manager_.get_arena_state(arena)) {
@@ -704,8 +705,8 @@ protected:
     #if defined(ARENA_ALLOCATOR_BASE_HEAP)
         auto offset = size_class_offset(SizeClass);
         auto arena = classes_[offset].pop();
-        if (classes_cache_[offset] == arena)
-            classes_cache_[offset] = 0;
+        assert (classes_cache_[offset] == arena);
+        classes_cache_[offset] = 0;
     #endif
     }
     
