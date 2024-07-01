@@ -605,16 +605,14 @@ protected:
     template< size_t SizeClass > void* allocate_impl() {
     again:
         auto arena = get_arena<SizeClass>();
-        if (arena_manager_.get_arena_state(arena)) {
-            auto ptr = arena->allocate();
-            if (ptr) {
-                //fprintf(stderr, "allocate_impl: arena %p allocated %p (reused, size %lu, capacity %lu)\n", arena, ptr, arena->size(), arena->capacity());
-                return ptr;
-            }
-
-            assert(arena->size() == arena->capacity());
+        auto ptr = arena->allocate();
+        if (ptr) {
+            //fprintf(stderr, "allocate_impl: arena %p allocated %p (reused, size %lu, capacity %lu)\n", arena, ptr, arena->size(), arena->capacity());
+            return ptr;
         }
 
+        assert(arena->size() == arena->capacity());
+    
         pop_arena<SizeClass>();
 
         if(get_size<SizeClass>())
@@ -622,7 +620,7 @@ protected:
 
         arena = allocate_arena<SizeClass>();
         assert(arena->size() == 0);
-        auto ptr = arena->allocate();
+        ptr = arena->allocate();
         //fprintf(stderr, "allocate_impl: arena %p allocated %p (new)\n", arena, ptr);
         return ptr;
     }
@@ -641,9 +639,22 @@ protected:
     template< size_t SizeClass > arena2<ArenaSize, SizeClass, 8>* get_arena() {
         auto offset = size_class_offset(SizeClass);
     #if defined(ARENA_ALLOCATOR_BASE_HEAP)
+        if (classes_cache_[offset])
+            return (arena2<ArenaSize, SizeClass, 8>*)classes_cache_[offset];
         //if (get_size<SizeClass>() == 0)
         //    allocate_arena<SizeClass>();
-        return (arena2<ArenaSize, SizeClass, 8>*)classes_[offset].top();
+    again:
+        void* arena = classes_[offset].top();
+        if (arena_manager_.get_arena_state(arena)) {
+            classes_cache_[offset] = arena;
+            return (arena2<ArenaSize, SizeClass, 8>*)arena;
+        } else {
+            pop_arena<SizeClass>();
+            if(classes_[offset].size())
+                goto again;
+        }
+
+        return allocate_arena<SizeClass>();
     #else
         return (arena2<ArenaSize, SizeClass, 8>*)classes_[offset];
     #endif
@@ -668,6 +679,7 @@ protected:
         auto* arena = new (ptr) arena2<ArenaSize, SizeClass, 8>;
     #if defined(ARENA_ALLOCATOR_BASE_HEAP)
         classes_[offset].push(arena);
+        classes_cache_[offset] = arena;
     #else
         classes_[offset] = arena;
     #endif
@@ -691,7 +703,9 @@ protected:
     template< size_t SizeClass > void pop_arena() {
     #if defined(ARENA_ALLOCATOR_BASE_HEAP)
         auto offset = size_class_offset(SizeClass);
-        classes_[offset].pop();
+        auto arena = classes_[offset].pop();
+        if (classes_cache_[offset] == arena)
+            classes_cache_[offset] = 0;
     #endif
     }
     
@@ -700,6 +714,8 @@ protected:
     #if defined(ARENA_ALLOCATOR_BASE_HEAP)
         auto offset = size_class_offset(SizeClass);
         classes_[offset].push(ptr);
+        if (classes_[offset].top() == ptr)
+            classes_cache_[offset] = ptr;
     #endif
     }
 
@@ -709,6 +725,7 @@ protected:
 #else
     static std::array<heap<void*, MaxSize/ArenaSize>, 23> classes_;    
 #endif
+    static std::array<void*, 23> classes_cache_;
 #else
     static std::array<void*, 23> classes_;
 #endif
@@ -721,6 +738,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std:
 #else
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<heap<void*, MaxSize/ArenaSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_;
 #endif
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<void*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_cache_;
 #else
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<void*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_;
 #endif
