@@ -460,7 +460,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         assert(metadata.state == Allocated);
         
         void* arena = 0;
-        for (size_t i = 0; i < 8; ++i) {
+        for (size_t i = 0; i < PageArenaCount; ++i) {
             if ((metadata.bitmap & (1 << i)) == 0) {
                 metadata.bitmap |= 1 << i;
                 arena = (uint8_t*)page + ArenaSize * i;
@@ -508,6 +508,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         }
 
         int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
+        assert(index < PageArenaCount);
         metadata.bitmap &= ~(1 << index);
         //fprintf(stderr, "deallocate_arena() page %p returned arena %p at index %d\n", page, ptr, index);
         if (metadata.bitmap == 0) {        
@@ -615,17 +616,9 @@ protected:
         }
 
         assert(arena->size() == arena->capacity());
-    
         pop_arena<SizeClass>();
-
-        if(get_size<SizeClass>())
-            goto again;
-
-        arena = allocate_arena<SizeClass>();
-        assert(arena->size() == 0);
-        ptr = arena->allocate();
-        //fprintf(stderr, "allocate_impl: arena %p allocated %p (new)\n", arena, ptr);
-        return ptr;
+        reset_arena<SizeClass>();
+        goto again;
     }
 
     template< size_t SizeClass > void deallocate_impl(void* ptr) noexcept {
@@ -642,23 +635,29 @@ protected:
     template< size_t SizeClass > arena2<ArenaSize, SizeClass, 8>* get_arena() {
         auto offset = size_class_offset(SizeClass);
     #if defined(ARENA_ALLOCATOR_BASE_HEAP)
-        if (classes_cache_[offset])
-            return (arena2<ArenaSize, SizeClass, 8>*)classes_cache_[offset];
-    again:
-        void* arena = classes_[offset].top();
-        if (arena_manager_.get_arena_state(arena)) {
-            classes_cache_[offset] = arena;
-            return (arena2<ArenaSize, SizeClass, 8>*)arena;
-        } else {
-            pop_arena<SizeClass>();
-            if(classes_[offset].size())
-                goto again;
-        }
-
-        return allocate_arena<SizeClass>();
+        assert(classes_cache_[offset]);
+        return (arena2<ArenaSize, SizeClass, 8>*)classes_cache_[offset];        
     #else
         return (arena2<ArenaSize, SizeClass, 8>*)classes_[offset];
     #endif
+    }
+
+    template< size_t SizeClass > void* reset_arena() {
+        auto offset = size_class_offset(SizeClass);
+    again:
+        while(!classes_[offset].empty()) {
+            void* arena = classes_[offset].top();
+            if (arena_manager_.get_arena_state(arena)) {
+                classes_cache_[offset] = arena;
+                return (arena2<ArenaSize, SizeClass, 8>*)arena;
+            } else {
+                pop_arena<SizeClass>();
+                if(classes_[offset].size())
+                    goto again;
+            }
+        }
+
+        return allocate_arena<SizeClass>();
     }
 
     template< size_t SizeClass > size_t get_size() {
