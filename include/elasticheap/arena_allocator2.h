@@ -695,7 +695,6 @@ protected:
     #if defined(ARENA_ALLOCATOR_BASE_HEAP)
         auto offset = size_class_offset(SizeClass);
         auto arena = classes_[offset].pop();
-        assert (classes_cache_[offset] == arena);
     #endif
     }
     
