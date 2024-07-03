@@ -82,8 +82,8 @@ template < std::size_t Alignment, typename T > T* mask(T* ptr) {
 
 struct arena2_metadata {
     uint8_t* begin_;
-    uint8_t* ptr_;
     uint8_t* end_;
+    uint32_t index_;
     uint32_t free_list_size_;
 };
 
@@ -100,9 +100,8 @@ template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class
 public:
     arena2() {
         begin_ = (uint8_t*)this + sizeof(*this);
-        ptr_ = begin_;
         end_ = (uint8_t*)this + ArenaSize;
-        free_list_size_ = 0;
+        free_list_size_ = index_ = 0;
     }
 
     void* allocate() {
@@ -112,11 +111,9 @@ public:
             assert(index < Count);
             ptr = begin_ + index * Size;
         } else {
-            ptr = ptr_;
-            if (ptr + Size > end_)
+            if (index_ == Count)
                 return 0;
-
-            ptr_ += Size;
+            ptr = begin_ + index_++ * Size;
         }
 
         assert(is_ptr_valid(ptr));
@@ -136,7 +133,7 @@ public:
 
     static constexpr std::size_t capacity() { return Count; }
 
-    std::size_t size() const { return (ptr_ - begin_)/Size - free_list_size_; }
+    std::size_t size() const { return index_ - free_list_size_; }
 
 private:
     bool is_ptr_valid(void* ptr) {
