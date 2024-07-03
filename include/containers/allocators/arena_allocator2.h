@@ -11,6 +11,7 @@
 #include <array>
 #include <cassert>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <limits>
 #include <memory>
@@ -34,6 +35,8 @@
         } \
     } while(0);
 #endif
+
+#define __assume(cond) do { if (!(cond)) __builtin_unreachable(); } while (0)
 
 //#define STATS
 //#define PAGE_MANAGER_ELASTIC
@@ -82,7 +85,6 @@ struct arena2_metadata {
     uint8_t* ptr_;
     uint8_t* end_;
     uint32_t free_list_size_;
-    uint32_t size_;
 };
 
 template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena2
@@ -100,13 +102,14 @@ public:
         begin_ = (uint8_t*)this + sizeof(*this);
         ptr_ = begin_;
         end_ = (uint8_t*)this + ArenaSize;
-        free_list_size_ = size_ = 0;
+        free_list_size_ = 0;
     }
 
     void* allocate() {
         uint8_t* ptr = 0;
         if (free_list_size_) {
             uint16_t index = free_list_[--free_list_size_];
+            assert(index < Count);
             ptr = begin_ + index * Size;
         } else {
             ptr = ptr_;
@@ -117,10 +120,8 @@ public:
         }
 
         assert(is_ptr_valid(ptr));
-        assert(size_ < Count);
-        ++size_;
-
         //fprintf(stderr, "arena2 %p allocate %p, size %u\n", this, ptr, size_);
+        __assume(ptr != 0);
         return ptr;
     }
     
@@ -131,11 +132,11 @@ public:
         assert(index < Count);
         assert(free_list_size_ < Count);
         free_list_[free_list_size_++] = index;
-        --size_;
     }
 
     static constexpr std::size_t capacity() { return Count; }
-    std::size_t size() const { return size_; }
+
+    std::size_t size() const { return (ptr_ - begin_)/Size - free_list_size_; }
 
 private:
     bool is_ptr_valid(void* ptr) {
