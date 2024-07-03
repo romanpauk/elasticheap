@@ -1,5 +1,5 @@
 //
-// This file is part of containers project <https://github.com/romanpauk/containers>
+// This file is part of elasticheap project <https://github.com/romanpauk/elasticheap>
 //
 // See LICENSE for license and copyright information
 // SPDX-License-Identifier: MIT
@@ -44,7 +44,7 @@
 #define ARENA_ALLOCATOR_BASE_HEAP
 #define ARENA_ALLOCATOR_BASE_ELASTIC
 
-namespace containers {
+namespace elasticheap {
 
 struct allocator_stats {
     std::size_t pages_allocated = 0;

@@ -1,8 +1,8 @@
 //
-// This file is part of containers project <https://github.com/romanpauk/containers>
+// This file is part of elasticheap project <https://github.com/romanpauk/elasticheap>
 //
 // See LICENSE for license and copyright information
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //
 
 #include <benchmark/benchmark.h>

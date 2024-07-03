@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(containers VERSION 0.1)
+project(elasticheap VERSION 0.1)
 enable_testing()
 include(FetchContent)
 set(CMAKE_CXX_STANDARD 17)
@@ -12,10 +12,10 @@ endif()
 include(cmake/md.cmake)
 include(cmake/sanitizers.cmake)
 
-sanitizers_init(CONTAINERS)
+sanitizers_init(ELASTICHEAP)
 
 # TODO: g++ -Wall -Wextra -Wpedantic -Q --help=warning | grep disabled
-set(CONTAINERS_WARNINGS_GCC
+set(ELASTICHEAP_WARNINGS_GCC
     -Wall
     # -Wpedantic - VLA support
     -Wextra 
@@ -24,14 +24,14 @@ set(CONTAINERS_WARNINGS_GCC
     -Wno-gnu-zero-variadic-macro-arguments
 )
 
-set(CONTAINERS_WARNINGS_MSVC
+set(ELASTICHEAP_WARNINGS_MSVC
     /W4
     /wd4101 # unreferenced local variable
     /wd4702 # unreachable code
 )
 
-option(CONTAINERS_ENABLE_TESTING "enable testing through googletest" ON)
-option(CONTAINERS_ENABLE_BENCHMARK "enable benchmarking through googlebenchmark" ON)
+option(ELASTICHEAP_ENABLE_TESTING "enable testing through googletest" ON)
+option(ELASTICHEAP_ENABLE_BENCHMARK "enable benchmarking through googlebenchmark" ON)
 
 find_program(CCACHE_FOUND ccache)
 if(CCACHE_FOUND)
@@ -39,7 +39,7 @@ if(CCACHE_FOUND)
     set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK ccache) 
 endif(CCACHE_FOUND)
 
-if(CONTAINERS_ENABLE_TESTING)
+if(ELASTICHEAP_ENABLE_TESTING)
     FetchContent_Declare(googletest
         GIT_REPOSITORY https://github.com/google/googletest.git
         GIT_TAG main)
@@ -51,7 +51,7 @@ if(CONTAINERS_ENABLE_TESTING)
     FetchContent_MakeAvailable(googletest)
 endif()
 
-if(CONTAINERS_ENABLE_BENCHMARK)
+if(ELASTICHEAP_ENABLE_BENCHMARK)
     FetchContent_Declare(benchmark
         GIT_REPOSITORY https://github.com/google/benchmark.git
         GIT_TAG main) 
@@ -60,67 +60,54 @@ if(CONTAINERS_ENABLE_BENCHMARK)
     FetchContent_MakeAvailable(benchmark)
 endif()
 
-add_library(containers INTERFACE)
-target_include_directories(containers INTERFACE include)
+add_library(elasticheap INTERFACE)
+target_include_directories(elasticheap INTERFACE include)
 
-target_sources(containers INTERFACE
-    include/containers/allocators/arena_allocator.h
-    include/containers/allocators/page_allocator.h
-    include/containers/growable_array.h
-    include/containers/evictable_unordered_map.h
+target_sources(elasticheap INTERFACE
+    include/elasticheap/arena_allocator2.h
     README.md
 )
 
-if(CONTAINERS_ENABLE_BENCHMARK)
-    FetchContent_Declare(concurrentqueue
-        GIT_REPOSITORY https://github.com/cameron314/concurrentqueue.git
-        GIT_TAG master) 
-    FetchContent_MakeAvailable(concurrentqueue)
-
-    add_executable(containers_benchmark
+if(ELASTICHEAP_ENABLE_BENCHMARK)
+    add_executable(elasticheap_benchmark
         benchmark/arena_allocator.cpp
-        benchmark/evictable_unordered_map.cpp
-        benchmark/growable_array.cpp
         benchmark/main.cpp
     )
 
-    target_link_libraries(containers_benchmark 
-        containers 
+    target_link_libraries(elasticheap_benchmark 
+        elasticheap 
         benchmark::benchmark
-        concurrentqueue
         $<$<PLATFORM_ID:Linux>:atomic>
     )
-    target_include_directories(containers_benchmark PRIVATE benchmark)
+    target_include_directories(elasticheap_benchmark PRIVATE benchmark)
     if(MSVC)
-        target_compile_definitions(containers_benchmark PRIVATE -D_ENABLE_EXTENDED_ALIGNED_STORAGE)
+        target_compile_definitions(elasticheap_benchmark PRIVATE -D_ENABLE_EXTENDED_ALIGNED_STORAGE)
     endif()
 
-    target_compile_options(containers_benchmark PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:${CONTAINERS_WARNINGS_GCC}>)
-    target_compile_options(containers_benchmark PRIVATE $<$<CXX_COMPILER_ID:MSVC>:${CONTAINERS_WARNINGS_MSVC} /bigobj>)
+    target_compile_options(elasticheap_benchmark PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:${CONTAINERS_WARNINGS_GCC}>)
+    target_compile_options(elasticheap_benchmark PRIVATE $<$<CXX_COMPILER_ID:MSVC>:${CONTAINERS_WARNINGS_MSVC} /bigobj>)
 
-    target_sanitize(CONTAINERS containers_benchmark)
+    target_sanitize(ELASTICHEAP elasticheap_benchmark)
 endif()
 
-if(CONTAINERS_ENABLE_TESTING)
-    add_executable(containers_test
+if(ELASTICHEAP_ENABLE_TESTING)
+    add_executable(elasticheap_test
         test/arena_allocator.cpp
-        test/evictable_unordered_map.cpp
-        test/growable_array.cpp
     )
 
-    add_test(NAME containers_test COMMAND containers_test)
-    target_link_libraries(containers_test 
-        containers	
+    add_test(NAME elasticheap_test COMMAND elasticheap_test)
+    target_link_libraries(elasticheap_test 
+        elasticheap	
         gtest_main
         $<$<PLATFORM_ID:Linux>:atomic>
     )
-    target_include_directories(containers_test PRIVATE test)
+    target_include_directories(elasticheap_test PRIVATE test)
     if(MSVC)
-        target_compile_definitions(containers_test PRIVATE -D_ENABLE_EXTENDED_ALIGNED_STORAGE)
+        target_compile_definitions(elasticheap_test PRIVATE -D_ENABLE_EXTENDED_ALIGNED_STORAGE)
     endif()
 
-    target_compile_options(containers_test PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:${CONTAINERS_WARNINGS_GCC}>)
-    target_compile_options(containers_test PRIVATE $<$<CXX_COMPILER_ID:MSVC>:${CONTAINERS_WARNINGS_MSVC} /bigobj>)
+    target_compile_options(elasticheap_test PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:${ELASTICHEAP_WARNINGS_GCC}>)
+    target_compile_options(elasticheap_test PRIVATE $<$<CXX_COMPILER_ID:MSVC>:${ELASTICHEAP_WARNINGS_MSVC} /bigobj>)
 
-    target_sanitize(CONTAINERS containers_test)
+    target_sanitize(ELASTICHEAP elasticheap_test)
 endif()
