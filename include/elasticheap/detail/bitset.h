@@ -26,51 +26,46 @@ namespace elasticheap::detail {
         typename T = typename bitset_type<Bits>::type,
         std::size_t Size = (Bits + sizeof(T) * 8 - 1) / (sizeof(T) * 8)
     > struct bitset_base {
-        static_assert(false);
-/*
+        static_assert(Size > 1);
+        static_assert((Bits & (Bits - 1)) == 0);
+        
+        using value_type = T;
+        static constexpr std::size_t size() { return Bits; }
+
         void clear() {
-            for(size_t i = 0; i < Size; ++i)
-                bytes_[i] = 0;
+            for(std::size_t i = 0; i < Size; ++i)
+                values_[i] = 0;
         }
 
-        void set(size_t index) {
+        void set(std::size_t index) {
             assert(index < Bits);
-            bytes_[index/sizeof(T)] |= (1 << (index & (sizeof(T) - 1));
+            values_[index/sizeof(T)/8] |= (1 << (index & (sizeof(T)*8 - 1)));
         }
 
-        void clear(size_t index) {
+        void clear(std::size_t index) {
             assert(index < Bits);
-            bytes_[index/sizeof(T)] &= ~(1 << (index & (sizeof(T) - 1)));
+            values_[index/sizeof(T)/8] &= ~(1 << (index & (sizeof(T)*8 - 1)));
         }
 
-        bool get(size_t index) {
+        bool get(std::size_t index) const {
             assert(index < Bits);
-            return bytes_[index/sizeof(T)] & (1 << (index & (sizeof(T) - 1)));
+            return values_[index/sizeof(T)/8] & (1 << (index & (sizeof(T)*8 - 1)));
         }
 
         bool empty() const {
-            for(size_t i = 0; i < Size; ++i)
-                if (bytes_[i] != 0) return false;
+            for(std::size_t i = 0; i < Size; ++i)
+                if (values_[i] != 0) return false;
             return true;
         }
 
         bool full() const {
-            if constexpr (Bits & 7) {
-                for(size_t i = 0; i < Size - 1; ++i)
-                    if (bytes_[i] != ~T{0}) return false;
-
-                // TODO:
-            } else {
-                for(size_t i = 0; i < Size; ++i)
-                    if (bytes_[i] != ~T{0}) return false;
-            }
-            
+            for(std::size_t i = 0; i < Size; ++i)
+                if (values_[i] != std::numeric_limits<T>::max()) return false;            
             return true;
         }
 
     private:
         T values_[Size];
-    */
     };
     
     template<
@@ -80,7 +75,8 @@ namespace elasticheap::detail {
         static_assert((Bits & (Bits - 1)) == 0);
 
         using value_type = T;
-    
+        static constexpr std::size_t size() { return Bits; }
+        
         void clear() { value_ = 0; }
         
         void set(std::size_t index) {
@@ -93,7 +89,7 @@ namespace elasticheap::detail {
             value_ &= ~(1 << index);
         }
 
-        bool get(std::size_t index) {
+        bool get(std::size_t index) const {
             assert(index < Bits);
             return value_ & (1 << index);
         }
