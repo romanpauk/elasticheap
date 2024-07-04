@@ -321,14 +321,14 @@ enum PageState {
     Full = 2,
 };
 
-template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > struct page_manager {
     static constexpr std::size_t MmapSize = MaxSize + PageSize - 1;
     static constexpr std::size_t PageCount = MaxSize / PageSize;
     static_assert(PageCount <= std::numeric_limits< uint32_t >::max());
 
     struct page_metadata {
         uint8_t state; // TODO: get rid of allocated, allocate_arena() needs to change
-        detail::bitset<8> bitmap;
+        detail::bitset<PageSize/ArenaSize> bitmap; // TODO: does not belong here...
     };
 
     page_manager() {
@@ -545,7 +545,7 @@ private:
         return true;
     }
 
-    page_manager< PageSize, MaxSize > page_manager_;
+    page_manager< PageSize, ArenaSize, MaxSize > page_manager_;
 
 #if defined(ARENA_MANAGER_ELASTIC)
     elastic_heap< uint32_t, PageCount > allocated_pages_;
