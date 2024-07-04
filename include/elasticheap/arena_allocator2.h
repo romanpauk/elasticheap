@@ -107,7 +107,7 @@ public:
     }
 
     void* allocate() {
-        assert(size_class_ == SizeClass);
+        assert(size_class_ == Size);
         uint8_t* ptr = 0;
         if (free_list_size_) {
             uint16_t index = free_list_[--free_list_size_];
@@ -127,7 +127,7 @@ public:
     
     void deallocate(void* ptr) {
         //fprintf(stderr, "arena2 %p deallocate %p size %u\n", this, ptr, size_);
-        assert(size_class_ == SizeClass);
+        assert(size_class_ == Size);
         assert(is_ptr_valid(ptr));
         size_t index = ((uint8_t*)ptr - begin_) / Size;
         assert(index < Count);
@@ -642,7 +642,7 @@ protected:
     template< size_t SizeClass > arena2<ArenaSize, SizeClass, 8>* get_cached_arena() {
         auto offset = size_class_offset(SizeClass);
     #if defined(ARENA_ALLOCATOR_BASE_HEAP)
-        assert(classes_cache_[offset]);
+        assert(classes_cache_[offset] == classes_[offset].top());
         return (arena2<ArenaSize, SizeClass, 8>*)classes_cache_[offset];        
     #else
         return (arena2<ArenaSize, SizeClass, 8>*)classes_[offset];
