@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <elasticheap/detail/bitset.h>
+
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -326,7 +328,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
 
     struct page_metadata {
         uint8_t state; // TODO: get rid of allocated, allocate_arena() needs to change
-        uint8_t bitmap;
+        detail::bitset<8> bitmap;
     };
 
     page_manager() {
@@ -441,7 +443,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         if (allocated_pages_.empty()) {
             page = page_manager_.allocate_page();
             auto& metadata = page_manager_.get_page_metadata(page);
-            metadata.bitmap = 0;
+            metadata.bitmap.clear();
             metadata.state = Allocated;    
             allocated_pages_.push(page_manager_.get_page_index(page));
         } else {
@@ -459,18 +461,17 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
             goto again;
         }
 
-        assert(metadata.bitmap != PageBitmapFull);
+        assert(!metadata.bitmap.full());
         assert(metadata.state == Allocated);
         
         void* arena = 0;
         for (size_t i = 0; i < PageArenaCount; ++i) {
-            if ((metadata.bitmap & (1 << i)) == 0) {
-                metadata.bitmap |= 1 << i;
+            if (!metadata.bitmap.get(i)) {
+                metadata.bitmap.set(i);
                 arena = (uint8_t*)page + ArenaSize * i;
                 //fprintf(stderr, "allocate_arena() page %p provided arena %p at index %lu\n", page, arena, i);
-                if (metadata.bitmap == PageBitmapFull) {
+                if (metadata.bitmap.full())
                     allocated_pages_.pop();
-                }
                 
                 break;
             }
@@ -506,15 +507,15 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         auto& metadata = page_manager_.get_page_metadata(page);
         assert(metadata.state == Allocated);
 
-        if (metadata.bitmap == PageBitmapFull) {
+        if (metadata.bitmap.full()) {
             allocated_pages_.push(page_manager_.get_page_index(page));
         }
 
         int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
         assert(index < PageArenaCount);
-        metadata.bitmap &= ~(1 << index);
+        metadata.bitmap.clear(index);
         //fprintf(stderr, "deallocate_arena() page %p returned arena %p at index %d\n", page, ptr, index);
-        if (metadata.bitmap == 0) {        
+        if (metadata.bitmap.empty()) {        
             metadata.state = Deallocated;
             page_manager_.deallocate_page(page);
         }
@@ -531,7 +532,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         if (metadata.state == Allocated) {
             auto& ametadata = *(arena_metadata*)ptr;
             int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
-            return (metadata.bitmap & (1<<index)) && ametadata.size_class_ == SizeClass;
+            return metadata.bitmap.get(index) && ametadata.size_class_ == SizeClass;
         }
         return false;
     }

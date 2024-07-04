@@ -19,4 +19,8 @@ TEST(bitset_test, basic) {
     bitset.set(0);
     ASSERT_FALSE(bitset.empty());
     ASSERT_TRUE(bitset.get(0));
+
+    for (size_t i = 0; i < 8; ++i)
+        bitset.set(i);
+    ASSERT_TRUE(bitset.full());
 }

@@ -9,6 +9,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <limits>
 #include <type_traits>
 
 namespace elasticheap::detail {
@@ -23,7 +24,7 @@ namespace elasticheap::detail {
     template<
         std::size_t Bits, 
         typename T = typename bitset_type<Bits>::type,
-        std::size_t Size = (Bits + sizeof(T)*8 - 1) / (sizeof(T) * 8)
+        std::size_t Size = (Bits + sizeof(T) * 8 - 1) / (sizeof(T) * 8)
     > struct bitset_base {
         static_assert(false);
 /*
@@ -72,10 +73,14 @@ namespace elasticheap::detail {
     */
     };
     
-     template<
+    template<
         std::size_t Bits, 
         typename T
     > struct bitset_base<Bits, T, 1> {
+        static_assert((Bits & (Bits - 1)) == 0);
+
+        using value_type = T;
+    
         void clear() { value_ = 0; }
         
         void set(std::size_t index) {
@@ -94,7 +99,7 @@ namespace elasticheap::detail {
         }
 
         bool empty() const { return value_ == 0; }
-        bool full() const { return value_ == ~T{0}; }
+        bool full() const { return value_ == std::numeric_limits<T>::max(); }
         
     private:
         T value_;
