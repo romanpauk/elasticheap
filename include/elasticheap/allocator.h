@@ -80,25 +80,25 @@ template < std::size_t Alignment, typename T > T* mask(T* ptr) {
     return (T*)((uintptr_t)ptr & ~(Alignment - 1));
 }
 
-struct arena2_metadata {
+struct arena_metadata {
     uint8_t* begin_;
     uint16_t index_;
     uint16_t free_list_size_;
     uint16_t size_class_;
 };
 
-template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena2
-    : public arena2_metadata
+template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena
+    : public arena_metadata
 { 
     static_assert((ArenaSize & (ArenaSize - 1)) == 0);
 
-    static constexpr std::size_t Count = (ArenaSize - sizeof(arena2_metadata))/(Size + 2);
+    static constexpr std::size_t Count = (ArenaSize - sizeof(arena_metadata))/(Size + 2);
     static_assert(Count <= std::numeric_limits<uint16_t>::max());
 
     uint16_t  free_list_[Count];
     
 public:
-    arena2() {
+    arena() {
         begin_ = (uint8_t*)this + sizeof(*this);
         free_list_size_ = index_ = 0;
         size_class_ = Size;
@@ -121,13 +121,13 @@ public:
         }
 
         assert(is_ptr_valid(ptr));
-        //fprintf(stderr, "arena2 %p allocate %p, size %u\n", this, ptr, size_);
+        //fprintf(stderr, "arena %p allocate %p, size %u\n", this, ptr, size_);
         __assume(ptr != 0);
         return ptr;
     }
     
     void deallocate(void* ptr) {
-        //fprintf(stderr, "arena2 %p deallocate %p size %u\n", this, ptr, size_);
+        //fprintf(stderr, "arena %p deallocate %p size %u\n", this, ptr, size_);
         assert(size_class_ == Size);
         assert(is_ptr_valid(ptr));
         size_t index = ((uint8_t*)ptr - begin_) / Size;
@@ -529,7 +529,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         void* page = page_manager_.get_page(ptr);
         auto& metadata = page_manager_.get_page_metadata(page);
         if (metadata.state == Allocated) {
-            auto& ametadata = *(arena2_metadata*)ptr;
+            auto& ametadata = *(arena_metadata*)ptr;
             int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
             return (metadata.bitmap & (1<<index)) && ametadata.size_class_ == SizeClass;
         }
@@ -640,13 +640,13 @@ protected:
         }
     }
 
-    template< size_t SizeClass > arena2<ArenaSize, SizeClass, 8>* get_cached_arena() {
+    template< size_t SizeClass > arena<ArenaSize, SizeClass, 8>* get_cached_arena() {
         auto offset = size_class_offset(SizeClass);
     #if defined(ARENA_ALLOCATOR_BASE_HEAP)
         assert(classes_cache_[offset] == classes_[offset].top());
-        return (arena2<ArenaSize, SizeClass, 8>*)classes_cache_[offset];        
+        return (arena<ArenaSize, SizeClass, 8>*)classes_cache_[offset];        
     #else
-        return (arena2<ArenaSize, SizeClass, 8>*)classes_[offset];
+        return (arena<ArenaSize, SizeClass, 8>*)classes_[offset];
     #endif
     }
 
@@ -654,10 +654,10 @@ protected:
         auto offset = size_class_offset(SizeClass);
     again:
         while(!classes_[offset].empty()) {
-            auto* arena = (arena2<ArenaSize, SizeClass, 8>*)classes_[offset].top();
-            if (arena_manager_.template get_arena_state< SizeClass >(arena) && arena->size() != arena->capacity()) {
-                classes_cache_[offset] = arena;
-                return arena;
+            auto* buffer = (arena<ArenaSize, SizeClass, 8>*)classes_[offset].top();
+            if (arena_manager_.template get_arena_state< SizeClass >(buffer) && buffer->size() != buffer->capacity()) {
+                classes_cache_[offset] = buffer;
+                return buffer;
             } else {
                 pop_arena<SizeClass>();
                 if(classes_[offset].size())
@@ -665,25 +665,25 @@ protected:
             }
         }
 
-        void* arena = allocate_arena<SizeClass>();
-        classes_cache_[offset] = arena;
-        return arena;
+        void* buffer = allocate_arena<SizeClass>();
+        classes_cache_[offset] = buffer;
+        return buffer;
     }
 
-    template< size_t SizeClass > arena2<ArenaSize, SizeClass, 8>* get_arena(void* ptr) {
-        return (arena2<ArenaSize, SizeClass, 8>*)arena_manager_.get_arena(ptr);
+    template< size_t SizeClass > arena<ArenaSize, SizeClass, 8>* get_arena(void* ptr) {
+        return (arena<ArenaSize, SizeClass, 8>*)arena_manager_.get_arena(ptr);
     }
 
-    template< size_t SizeClass > arena2<ArenaSize, SizeClass, 8>* allocate_arena() {
+    template< size_t SizeClass > arena<ArenaSize, SizeClass, 8>* allocate_arena() {
         auto offset = size_class_offset(SizeClass);
         void* ptr = arena_manager_.allocate_arena();
-        auto* arena = new (ptr) arena2<ArenaSize, SizeClass, 8>;
+        auto* buffer = new (ptr) arena<ArenaSize, SizeClass, 8>;
     #if defined(ARENA_ALLOCATOR_BASE_HEAP)
-        classes_[offset].push(arena);
+        classes_[offset].push(buffer);
     #else
-        classes_[offset] = arena;
+        classes_[offset] = buffer;
     #endif
-        return arena;
+        return buffer;
     }
 
     template< size_t SizeClass > void deallocate_arena(void* ptr) {
@@ -703,7 +703,7 @@ protected:
     template< size_t SizeClass > void pop_arena() {
     #if defined(ARENA_ALLOCATOR_BASE_HEAP)
         auto offset = size_class_offset(SizeClass);
-        auto arena = classes_[offset].pop();
+        auto buffer = classes_[offset].pop();
     #endif
     }
     
@@ -741,7 +741,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std:
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> arena_manager<PageSize, ArenaSize, MaxSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::arena_manager_;
 
-template <typename T > class arena_allocator2
+template <typename T > class allocator
     : public arena_allocator_base< 1<<21, 1<<18, 1ull<<40> 
 {
     template <typename U> friend class arena_allocator2;
@@ -749,7 +749,7 @@ template <typename T > class arena_allocator2
 public:
     using value_type    = T;
 
-    arena_allocator2() noexcept {
+    allocator() noexcept {
         reset_cached_arena<size_class<T>()>();
     }
     
@@ -767,12 +767,12 @@ public:
 };
 
 template <typename T, typename U>
-bool operator == (const arena_allocator2<T>& lhs, const arena_allocator2<U>& rhs) noexcept {
-    return lhs.arena_ = rhs.arena_;
+bool operator == (const allocator<T>& lhs, const allocator<U>& rhs) noexcept {
+    return true;
 }
 
 template <typename T, typename U>
-bool operator != (const arena_allocator2<T>& x, const arena_allocator2<U>& y) noexcept {
+bool operator != (const allocator<T>& x, const allocator<U>& y) noexcept {
     return !(x == y);
 }
 

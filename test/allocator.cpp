@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: MIT
 //
 
-#include <elasticheap/arena_allocator2.h>
+#include <elasticheap/allocator.h>
 
 #include <gtest/gtest.h>
 

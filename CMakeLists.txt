@@ -64,14 +64,14 @@ add_library(elasticheap INTERFACE)
 target_include_directories(elasticheap INTERFACE include)
 
 target_sources(elasticheap INTERFACE
-    include/elasticheap/arena_allocator2.h
+    include/elasticheap/allocator.h
     include/elasticheap/detail/bitset.h
     README.md
 )
 
 if(ELASTICHEAP_ENABLE_BENCHMARK)
     add_executable(elasticheap_benchmark
-        benchmark/arena_allocator.cpp
+        benchmark/allocator.cpp
         benchmark/main.cpp
     )
 
@@ -93,7 +93,7 @@ endif()
 
 if(ELASTICHEAP_ENABLE_TESTING)
     add_executable(elasticheap_test
-        test/arena_allocator.cpp
+        test/allocator.cpp
         test/bitset.cpp
     )
 
