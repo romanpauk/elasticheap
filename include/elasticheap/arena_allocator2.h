@@ -85,6 +85,7 @@ struct arena2_metadata {
     uint8_t* end_;
     uint32_t index_;
     uint32_t free_list_size_;
+    uint32_t size_class_;
 };
 
 template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena2
@@ -102,9 +103,11 @@ public:
         begin_ = (uint8_t*)this + sizeof(*this);
         end_ = (uint8_t*)this + ArenaSize;
         free_list_size_ = index_ = 0;
+        size_class_ = Size;
     }
 
     void* allocate() {
+        assert(size_class_ == SizeClass);
         uint8_t* ptr = 0;
         if (free_list_size_) {
             uint16_t index = free_list_[--free_list_size_];
@@ -124,6 +127,7 @@ public:
     
     void deallocate(void* ptr) {
         //fprintf(stderr, "arena2 %p deallocate %p size %u\n", this, ptr, size_);
+        assert(size_class_ == SizeClass);
         assert(is_ptr_valid(ptr));
         size_t index = ((uint8_t*)ptr - begin_) / Size;
         assert(index < Count);
@@ -519,12 +523,16 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
     #endif
     }
 
-    bool get_arena_state(void* ptr) {
+    template< std::size_t SizeClass > bool get_arena_state(void* ptr) {
         assert(is_arena_valid(ptr));
         void* page = page_manager_.get_page(ptr);
         auto& metadata = page_manager_.get_page_metadata(page);
-        int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
-        return (metadata.bitmap & (1<<index));
+        if (metadata.state == Allocated) {
+            auto& ametadata = *(arena2_metadata*)ptr;
+            int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
+            return (metadata.bitmap & (1<<index)) && ametadata.size_class_ == SizeClass;
+        }
+        return false;
     }
 
 private:
@@ -646,7 +654,7 @@ protected:
     again:
         while(!classes_[offset].empty()) {
             auto* arena = (arena2<ArenaSize, SizeClass, 8>*)classes_[offset].top();
-            if (arena_manager_.get_arena_state(arena) && arena->size() != arena->capacity()) {
+            if (arena_manager_.template get_arena_state< SizeClass >(arena) && arena->size() != arena->capacity()) {
                 classes_cache_[offset] = arena;
                 return arena;
             } else {
