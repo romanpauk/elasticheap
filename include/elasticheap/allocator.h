@@ -58,7 +58,7 @@ struct allocator_stats {
 
 static allocator_stats stats;
 
-void print_stats() {
+inline void print_stats() {
     fprintf(stderr, "stats: pages_allocated %lu, pages_deallocated_heap_size %lu, pages_deallocated_heap_commited %lu, arenas_allocated %lu, arenas_deallocated_heap_size %lu\n",
         stats.pages_allocated, stats.pages_deallocated_heap_size, stats.pages_deallocated_heap_commited, stats.arenas_allocated, stats.arenas_deallocated_heap_size
     );
@@ -157,14 +157,6 @@ template< typename T, std::size_t Capacity, typename Compare = std::greater<> > 
         std::push_heap(values_, values_ + size_, Compare{}); 
     }
 
-    template< size_t N > void push(const std::array<T, N>& values) {
-        for(size_t i = 0; i < values.size(); ++i) {
-            assert(size_ < Capacity);
-            values_[size_++] = values[i];
-        }
-        std::make_heap(values_, values_ + size_, Compare{}); 
-    }
-
     bool empty() const {
         return size_ == 0;
     }
@@ -174,7 +166,7 @@ template< typename T, std::size_t Capacity, typename Compare = std::greater<> > 
         return values_[--size_];
     }
 
-    T& top() {
+    const T& top() {
         assert(!empty());
         return values_[0];
     }
@@ -197,6 +189,55 @@ template< typename T, std::size_t Capacity, typename Compare = std::greater<> > 
 private:
     std::size_t size_ = 0;
     T values_[Capacity];
+};
+
+template< typename T, std::size_t Capacity > struct bitset_heap {
+    bitset_heap() {
+        bitmap_.clear();
+    }
+
+    void push(T value) {
+        assert(value < Capacity);
+        assert(!bitmap_.get(value));
+        bitmap_.set(value);
+        ++size_;
+        if (min_ > value) min_ = value;
+        if (max_ < value) max_ = value;
+    }
+
+    bool empty() const {
+        return size_ == 0;
+    }
+
+    T pop() {
+        assert(!empty());
+        T min = min_;
+        assert(bitmap_.get(min));
+        bitmap_.clear(min);
+        --size_;
+        for(std::size_t i = min + 1; i < max_; ++i) {
+            if (bitmap_.get(i)) {
+                min_ = i;
+                return min;
+            }
+        }
+
+        min_ = max_ = 0;
+        return min;
+    }
+
+    const T& top() {
+        assert(!empty());
+        return min_;
+    }
+
+    std::size_t size() const { return size_; }
+
+private:
+    std::size_t size_ = 0;
+    T min_ = Capacity;
+    T max_ = 0;
+    detail::bitset<Capacity> bitmap_;
 };
 
 template< typename T, std::size_t Size, std::size_t PageSize = 4096 > struct elastic_array {
@@ -275,11 +316,6 @@ template< typename T, std::size_t Size, typename Compare = std::greater<> > stru
         std::push_heap(values_.begin(), values_.end(), Compare{}); 
     }
 
-    template< size_t N > void push(const std::array<T, N>& values) {
-        values_.emplace_back(values.begin(), values.end());
-        std::make_heap(values_.begin(), values_.end(), Compare{}); 
-    }
-
     bool empty() const {
         return values_.empty();
     }
@@ -291,7 +327,7 @@ template< typename T, std::size_t Size, typename Compare = std::greater<> > stru
         return value;
     }
 
-    T& top() {
+    const T& top() {
         return values_[0];
     }
 
@@ -421,7 +457,8 @@ private:
 #if defined(PAGE_MANAGER_ELASTIC)
     elastic_heap< uint32_t, PageCount > deallocated_pages_;
 #else
-    heap< uint32_t, PageCount > deallocated_pages_;
+    //heap< uint32_t, PageCount > deallocated_pages_;
+    bitset_heap< uint32_t, PageCount > deallocated_pages_;
 #endif
     
     page_metadata metadata_[PageCount];
@@ -470,8 +507,10 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
                 metadata.bitmap.set(i);
                 arena = (uint8_t*)page + ArenaSize * i;
                 //fprintf(stderr, "allocate_arena() page %p provided arena %p at index %lu\n", page, arena, i);
-                if (metadata.bitmap.full())
+                if (metadata.bitmap.full()) {
+                    assert(page_manager_.get_page(allocated_pages_.top()) == page);
                     allocated_pages_.pop();
+                }
                 
                 break;
             }
@@ -550,7 +589,8 @@ private:
 #if defined(ARENA_MANAGER_ELASTIC)
     elastic_heap< uint32_t, PageCount > allocated_pages_;
 #else
-    heap< uint32_t, PageCount > allocated_pages_;
+    //heap< uint32_t, PageCount > allocated_pages_;
+    bitset_heap< uint32_t, PageCount > allocated_pages_;
 #endif
 };
 

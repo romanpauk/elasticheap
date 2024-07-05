@@ -73,6 +73,7 @@ if(ELASTICHEAP_ENABLE_BENCHMARK)
     add_executable(elasticheap_benchmark
         benchmark/allocator.cpp
         benchmark/main.cpp
+        benchmark/page_manager.cpp
     )
 
     target_link_libraries(elasticheap_benchmark 
