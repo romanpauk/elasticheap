@@ -41,8 +41,6 @@
 #define __assume(cond) do { if (!(cond)) __builtin_unreachable(); } while (0)
 
 //#define STATS
-//#define PAGE_MANAGER_ELASTIC
-//#define ARENA_MANAGER_ELASTIC
 #define ARENA_ALLOCATOR_BASE_HEAP
 #define ARENA_ALLOCATOR_BASE_ELASTIC
 
@@ -448,13 +446,7 @@ private:
     uint64_t memory_size_ = 0;
     
     std::mutex mutex_;
-
-#if defined(PAGE_MANAGER_ELASTIC)
-    elastic_heap< uint32_t, PageCount > deallocated_pages_;
-#else
-    //heap< uint32_t, PageCount > deallocated_pages_;
     bitset_heap< uint32_t, PageCount > deallocated_pages_;
-#endif
 };
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > struct arena_manager {
@@ -584,14 +576,7 @@ private:
     }
 
     page_manager< PageSize, MaxSize > page_manager_;
-
-#if defined(ARENA_MANAGER_ELASTIC)
-    elastic_heap< uint32_t, PageCount > allocated_pages_;
-#else
-    //heap< uint32_t, PageCount > allocated_pages_;
     bitset_heap< uint32_t, PageCount > allocated_pages_;
-#endif
-
     page_metadata metadata_[PageCount];
 };
 
