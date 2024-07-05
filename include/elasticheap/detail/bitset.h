@@ -40,17 +40,17 @@ namespace elasticheap::detail {
 
         void set(std::size_t index) {
             assert(index < Bits);
-            values_[index/sizeof(T)/8] |= (T{1} << (index & (sizeof(T)*8 - 1)));
+            values_[index/sizeof(T)/8] |= (T{1} << (index & (sizeof(T) * 8 - 1)));
         }
 
         void clear(std::size_t index) {
             assert(index < Bits);
-            values_[index/sizeof(T)/8] &= ~(T{1} << (index & (sizeof(T)*8 - 1)));
+            values_[index/sizeof(T)/8] &= ~(T{1} << (index & (sizeof(T) * 8 - 1)));
         }
 
         bool get(std::size_t index) const {
             assert(index < Bits);
-            return values_[index/sizeof(T)/8] & (T{1} << (index & (sizeof(T)*8 - 1)));
+            return values_[index/sizeof(T)/8] & (T{1} << (index & (sizeof(T) * 8 - 1)));
         }
 
         bool empty() const {
