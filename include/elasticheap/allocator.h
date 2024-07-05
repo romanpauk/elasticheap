@@ -222,7 +222,9 @@ template< typename T, std::size_t Capacity > struct bitset_heap {
             }
         }
 
-        min_ = max_ = 0;
+        min_ = Capacity;
+        max_ = 0;
+
         return min;
     }
 
@@ -483,7 +485,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
             page = page_manager_.allocate_page();
             auto& metadata = page_manager_.get_page_metadata(page);
             metadata.bitmap.clear();
-            metadata.state = Allocated;    
+            metadata.state = Allocated;
             allocated_pages_.push(page_manager_.get_page_index(page));
         } else {
             page = page_manager_.get_page(allocated_pages_.top());
@@ -508,7 +510,6 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
             if (!metadata.bitmap.get(i)) {
                 metadata.bitmap.set(i);
                 arena = (uint8_t*)page + ArenaSize * i;
-                //fprintf(stderr, "allocate_arena() page %p provided arena %p at index %lu\n", page, arena, i);
                 if (metadata.bitmap.full()) {
                     assert(page_manager_.get_page(allocated_pages_.top()) == page);
                     allocated_pages_.pop();
@@ -548,9 +549,8 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         auto& metadata = page_manager_.get_page_metadata(page);
         assert(metadata.state == Allocated);
 
-        if (metadata.bitmap.full()) {
+        if (metadata.bitmap.full())
             allocated_pages_.push(page_manager_.get_page_index(page));
-        }
 
         int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
         assert(index < PageArenaCount);
@@ -558,6 +558,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         //fprintf(stderr, "deallocate_arena() page %p returned arena %p at index %d\n", page, ptr, index);
         if (metadata.bitmap.empty()) {        
             metadata.state = Deallocated;
+            //allocated_pages_.erase(page_manager_.get_page_index(page));
             page_manager_.deallocate_page(page);
         }
 
