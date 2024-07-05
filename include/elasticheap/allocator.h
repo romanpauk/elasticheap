@@ -41,8 +41,6 @@
 #define __assume(cond) do { if (!(cond)) __builtin_unreachable(); } while (0)
 
 //#define STATS
-#define ARENA_ALLOCATOR_BASE_HEAP
-#define ARENA_ALLOCATOR_BASE_ELASTIC
 
 namespace elasticheap {
 
@@ -669,12 +667,8 @@ protected:
 
     template< size_t SizeClass > arena<ArenaSize, SizeClass, 8>* get_cached_arena() {
         auto offset = size_class_offset(SizeClass);
-    #if defined(ARENA_ALLOCATOR_BASE_HEAP)
         assert(classes_cache_[offset] == classes_[offset].top());
         return (arena<ArenaSize, SizeClass, 8>*)classes_cache_[offset];        
-    #else
-        return (arena<ArenaSize, SizeClass, 8>*)classes_[offset];
-    #endif
     }
 
     template< size_t SizeClass > void* reset_cached_arena() {
@@ -705,68 +699,37 @@ protected:
         auto offset = size_class_offset(SizeClass);
         void* ptr = arena_manager_.allocate_arena();
         auto* buffer = new (ptr) arena<ArenaSize, SizeClass, 8>;
-    #if defined(ARENA_ALLOCATOR_BASE_HEAP)
         classes_[offset].push(arena_manager_.get_arena_index(buffer));
-    #else
-        classes_[offset] = buffer;
-    #endif
         return buffer;
     }
 
     template< size_t SizeClass > void deallocate_arena(void* ptr) {
         auto offset = size_class_offset(SizeClass);
-    #if defined(ARENA_ALLOCATOR_BASE_HEAP)
-        // TODO
         if (classes_[offset].top() != arena_manager_.get_arena_index(ptr)) {
             arena_manager_.deallocate_arena(ptr);
         }
-    #else
-        if (classes_[offset] != ptr) {
-            arena_manager_.deallocate_arena(ptr);
-        }
-    #endif
     }
 
     template< size_t SizeClass > void pop_arena() {
-    #if defined(ARENA_ALLOCATOR_BASE_HEAP)
         auto offset = size_class_offset(SizeClass);
         classes_[offset].pop();
-    #endif
     }
     
     template< size_t SizeClass > void push_arena(void* ptr) {
         (void)ptr;
-    #if defined(ARENA_ALLOCATOR_BASE_HEAP)
         auto offset = size_class_offset(SizeClass);
         classes_[offset].push(arena_manager_.get_arena_index(ptr));
-    #endif
     }
 
-#if defined(ARENA_ALLOCATOR_BASE_HEAP)
-#if defined(ARENA_ALLOCATOR_BASE_ELASTIC)
-    static std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> classes_;
-#else
-    static std::array<heap<void*, MaxSize/ArenaSize>, 23> classes_;    
-#endif
-    static std::array<void*, 23> classes_cache_;
-#else
-    static std::array<void*, 23> classes_;
-#endif
     static arena_manager<PageSize, ArenaSize, MaxSize> arena_manager_;
+
+    static std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> classes_;
+    static std::array<void*, 23> classes_cache_;
 };
 
-#if defined(ARENA_ALLOCATOR_BASE_HEAP)
-#if defined(ARENA_ALLOCATOR_BASE_ELASTIC)
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_;
-#else
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<heap<void*, MaxSize/ArenaSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_;
-#endif
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<void*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_cache_;
-#else
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<void*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_;
-#endif
-
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> arena_manager<PageSize, ArenaSize, MaxSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::arena_manager_;
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_;
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<void*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_cache_;
 
 template <typename T > class allocator
     : public arena_allocator_base< 1<<21, 1<<18, 1ull<<40> 
