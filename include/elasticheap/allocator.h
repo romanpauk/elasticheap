@@ -480,28 +480,27 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
     static_assert(ArenaCount <= std::numeric_limits<uint32_t>::max());
 
     void* get_allocated_page() {
-        void* page = 0;
-        if (allocated_pages_.empty()) {
-            page = page_manager_.allocate_page();
+        while(!allocated_pages_.empty()) {
+            void* page = page_manager_.get_page(allocated_pages_.top());
             auto& metadata = page_manager_.get_page_metadata(page);
-            metadata.bitmap.clear();
-            metadata.state = Allocated;
-            allocated_pages_.push(page_manager_.get_page_index(page));
-        } else {
-            page = page_manager_.get_page(allocated_pages_.top());
+            if (metadata.state == Deallocated) {
+                allocated_pages_.pop();
+                continue;
+            }
+            return page;
         }
+
+        void* page = page_manager_.allocate_page();
+        auto& metadata = page_manager_.get_page_metadata(page);
+        metadata.bitmap.clear();
+        metadata.state = Allocated;
+        allocated_pages_.push(page_manager_.get_page_index(page));
         return page;
     }
 
     void* allocate_arena() {
-    again:
         void* page = get_allocated_page();
         auto& metadata = page_manager_.get_page_metadata(page);
-        if (metadata.state == Deallocated) {
-            allocated_pages_.pop();
-            goto again;
-        }
-
         assert(!metadata.bitmap.full());
         assert(metadata.state == Allocated);
         
@@ -788,7 +787,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> aren
 template <typename T > class allocator
     : public arena_allocator_base< 1<<21, 1<<18, 1ull<<40> 
 {
-    template <typename U> friend class arena_allocator2;
+    template <typename U> friend class allocator;
     
 public:
     using value_type    = T;
