@@ -32,6 +32,8 @@ TYPED_TEST(bitset_test, basic) {
     ASSERT_FALSE(bitset.empty());
     ASSERT_FALSE(bitset.full());
     ASSERT_TRUE(bitset.get(0));
+    bitset.clear(0);
+    ASSERT_FALSE(bitset.get(0));
 
     for (size_t i = 0; i < bitset.size(); ++i) {
         bitset.set(i);

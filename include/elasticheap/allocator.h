@@ -84,9 +84,9 @@ template < std::size_t Alignment, typename T > T* mask(T* ptr) {
 
 struct arena_metadata {
     uint8_t* begin_;
-    uint16_t index_;
-    uint16_t free_list_size_;
-    uint16_t size_class_;
+    uint32_t index_;
+    uint32_t free_list_size_;
+    uint32_t size_class_;
 };
 
 template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena
@@ -215,7 +215,7 @@ template< typename T, std::size_t Capacity > struct bitset_heap {
         assert(bitmap_.get(min));
         bitmap_.clear(min);
         --size_;
-        for(std::size_t i = min + 1; i < max_; ++i) {
+        for(std::size_t i = min + 1; i <= max_; ++i) {
             if (bitmap_.get(i)) {
                 min_ = i;
                 return min;
@@ -387,8 +387,10 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
             if (!deallocated_pages_.empty()) {
                 ptr = get_page(deallocated_pages_.pop());
             } else {
-                if (memory_size_ == PageCount)
+                if (memory_size_ == PageCount) {
+                    fprintf(stderr, "Out of memory\n");
                     std::abort();
+                }
                 ptr = (uint8_t*)memory_ + memory_size_++ * PageSize;
             }
         }

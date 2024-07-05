@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <limits>
 #include <type_traits>
+#include <cstdio>
 
 namespace elasticheap::detail {
     template< std::size_t Bits > struct bitset_type {
@@ -39,17 +40,17 @@ namespace elasticheap::detail {
 
         void set(std::size_t index) {
             assert(index < Bits);
-            values_[index/sizeof(T)/8] |= (1 << (index & (sizeof(T)*8 - 1)));
+            values_[index/sizeof(T)/8] |= (T{1} << (index & (sizeof(T)*8 - 1)));
         }
 
         void clear(std::size_t index) {
             assert(index < Bits);
-            values_[index/sizeof(T)/8] &= ~(1 << (index & (sizeof(T)*8 - 1)));
+            values_[index/sizeof(T)/8] &= ~(T{1} << (index & (sizeof(T)*8 - 1)));
         }
 
         bool get(std::size_t index) const {
             assert(index < Bits);
-            return values_[index/sizeof(T)/8] & (1 << (index & (sizeof(T)*8 - 1)));
+            return values_[index/sizeof(T)/8] & (T{1} << (index & (sizeof(T)*8 - 1)));
         }
 
         bool empty() const {
@@ -81,17 +82,17 @@ namespace elasticheap::detail {
         
         void set(std::size_t index) {
             assert(index < Bits);
-            value_ |= 1 << index;
+            value_ |= T{1} << index;
         }
 
         void clear(std::size_t index) {
             assert(index < Bits);
-            value_ &= ~(1 << index);
+            value_ &= ~(T{1} << index);
         }
 
         bool get(std::size_t index) const {
             assert(index < Bits);
-            return value_ & (1 << index);
+            return value_ & (T{1} << index);
         }
 
         bool empty() const { return value_ == 0; }

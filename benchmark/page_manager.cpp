@@ -9,10 +9,10 @@
 
 #include <benchmark/benchmark.h>
 
-#define N 26
+#define N 22
 
 static void page_manager_allocate_deallocate(benchmark::State& state) {
-    static elasticheap::page_manager<1<<21,1<<18,1ull<<40> page_manager;
+    static elasticheap::page_manager<1<<21,1<<18,1ull<<44> page_manager;
     std::vector< void* > pages(state.range());
 
     for (auto _ : state) {
