@@ -11,7 +11,6 @@
 #include <cstdint>
 #include <limits>
 #include <type_traits>
-#include <cstdio>
 
 namespace elasticheap::detail {
     template< std::size_t Bits > struct bitset_type {

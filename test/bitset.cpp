@@ -21,6 +21,10 @@ using bitset_types = testing::Types<
 template <typename T> struct bitset_test : public testing::Test {};
 TYPED_TEST_SUITE(bitset_test, bitset_types);
 
+TYPED_TEST(bitset_test, sizes) {
+    static_assert(sizeof(TypeParam) == TypeParam::size()/8);
+}
+
 TYPED_TEST(bitset_test, basic) {
     TypeParam bitset;
     bitset.clear();
