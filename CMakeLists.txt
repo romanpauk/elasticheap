@@ -66,6 +66,7 @@ target_include_directories(elasticheap INTERFACE include)
 target_sources(elasticheap INTERFACE
     include/elasticheap/allocator.h
     include/elasticheap/detail/atomic_bitset.h
+    include/elasticheap/detail/atomic_bitset_heap.h
     include/elasticheap/detail/bitset.h
     README.md
 )
@@ -97,6 +98,7 @@ if(ELASTICHEAP_ENABLE_TESTING)
     add_executable(elasticheap_test
         test/allocator.cpp
         test/atomic_bitset.cpp
+        test/atomic_bitset_heap.cpp
         test/bitset.cpp
         test/bitset_heap.cpp
     )
