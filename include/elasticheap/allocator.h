@@ -8,6 +8,7 @@
 #pragma once
 
 #include <elasticheap/detail/bitset.h>
+#include <elasticheap/detail/bitset_heap.h>
 
 #include <algorithm>
 #include <array>
@@ -144,98 +145,6 @@ private:
         assert(is_ptr_aligned(ptr, Alignment));
         return true;
     }
-};
-
-template< typename T, std::size_t Capacity, typename Compare = std::greater<> > struct heap {
-    void push(T value) {
-        assert(size_ < Capacity);
-        values_[size_++] = value;
-        std::push_heap(values_, values_ + size_, Compare{}); 
-    }
-
-    bool empty() const {
-        return size_ == 0;
-    }
-
-    T pop() {
-        std::pop_heap(values_, values_ + size_, Compare{});
-        return values_[--size_];
-    }
-
-    const T& top() {
-        assert(!empty());
-        return values_[0];
-    }
-
-    void erase(T value) {
-        assert(!empty());
-        for(size_t i = 0; i < size_; ++i) {
-            if (values_[i] == value) {
-                values_[i] = values_[--size_];
-                std::make_heap(values_, values_ + size_, Compare{});
-                return;
-            }
-        }
-
-        assert(false);
-    }
-
-    std::size_t size() const { return size_; }
-
-private:
-    std::size_t size_ = 0;
-    T values_[Capacity];
-};
-
-template< typename T, std::size_t Capacity > struct bitset_heap {
-    bitset_heap() {
-        bitmap_.clear();
-    }
-
-    void push(T value) {
-        assert(value < Capacity);
-        assert(!bitmap_.get(value));
-        bitmap_.set(value);
-        ++size_;
-        if (min_ > value) min_ = value;
-        if (max_ < value) max_ = value;
-    }
-
-    bool empty() const {
-        return size_ == 0;
-    }
-
-    T pop() {
-        assert(!empty());
-        T min = min_;
-        assert(bitmap_.get(min));
-        bitmap_.clear(min);
-        --size_;
-        for(std::size_t i = min + 1; i <= max_; ++i) {
-            if (bitmap_.get(i)) {
-                min_ = i;
-                return min;
-            }
-        }
-
-        min_ = Capacity;
-        max_ = 0;
-
-        return min;
-    }
-
-    const T& top() {
-        assert(!empty());
-        return min_;
-    }
-
-    std::size_t size() const { return size_; }
-
-private:
-    std::size_t size_ = 0;
-    T min_ = Capacity;
-    T max_ = 0;
-    detail::bitset<Capacity> bitmap_;
 };
 
 template< typename T, std::size_t Size, std::size_t PageSize = 4096 > struct elastic_array {
@@ -444,7 +353,7 @@ private:
     uint64_t memory_size_ = 0;
     
     std::mutex mutex_;
-    bitset_heap< uint32_t, PageCount > deallocated_pages_;
+    detail::bitset_heap< uint32_t, PageCount > deallocated_pages_;
 };
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > struct arena_manager {
@@ -574,7 +483,7 @@ private:
     }
 
     page_manager< PageSize, MaxSize > page_manager_;
-    bitset_heap< uint32_t, PageCount > allocated_pages_;
+    detail::bitset_heap< uint32_t, PageCount > allocated_pages_;
     page_metadata metadata_[PageCount];
 };
 
