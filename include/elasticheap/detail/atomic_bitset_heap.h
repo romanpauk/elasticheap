@@ -74,7 +74,7 @@ private:
     }
 
     std::atomic<uint64_t> range_;
-    detail::atomic_bitset<Capacity> bitmap_;
+    alignas(64) detail::atomic_bitset<Capacity> bitmap_;
 };
 
 }

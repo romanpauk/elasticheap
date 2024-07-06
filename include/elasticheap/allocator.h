@@ -9,9 +9,11 @@
 
 #include <elasticheap/detail/bitset.h>
 #include <elasticheap/detail/bitset_heap.h>
+#include <elasticheap/detail/atomic_bitset_heap.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
@@ -275,18 +277,15 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
 
     void* allocate_page() {
         void* ptr = 0;
-        {
-            std::lock_guard lock(mutex_);
-
-            if (!deallocated_pages_.empty()) {
-                ptr = get_page(deallocated_pages_.pop());
-            } else {
-                if (memory_size_ == PageCount) {
-                    fprintf(stderr, "Out of memory\n");
-                    std::abort();
-                }
-                ptr = (uint8_t*)memory_ + memory_size_++ * PageSize;
+        uint32_t page = 0;
+        if (deallocated_pages_.pop(page)) {
+            ptr = get_page(page);
+        } else {
+            if (memory_size_ == PageCount) {
+                fprintf(stderr, "Out of memory\n");
+                std::abort();
             }
+            ptr = (uint8_t*)memory_ + memory_size_.fetch_add(1, std::memory_order_relaxed) * PageSize;
         }
 
         assert(is_page_valid(ptr));
@@ -305,7 +304,6 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
         //mprotect(ptr, PageSize, PROT_NONE);
         madvise(ptr, PageSize, MADV_DONTNEED);
 
-        std::lock_guard lock(mutex_);
         deallocated_pages_.push(get_page_index(ptr));
     #if defined(STATS)
         --stats.pages_allocated;
@@ -342,10 +340,8 @@ private:
 
     void* mmap_ = 0;
     void* memory_ = 0;
-    uint64_t memory_size_ = 0;
-    
-    std::mutex mutex_;
-    detail::bitset_heap< uint32_t, PageCount > deallocated_pages_;
+    alignas(64) std::atomic<uint64_t> memory_size_ = 0;
+    alignas(64) detail::atomic_bitset_heap< uint32_t, PageCount > deallocated_pages_;
 };
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > struct arena_manager {
@@ -570,7 +566,7 @@ protected:
 
     template< size_t SizeClass > arena<ArenaSize, SizeClass, 8>* get_cached_arena() {
         auto offset = size_class_offset(SizeClass);
-        assert(classes_cache_[offset] == classes_[offset].top());
+        assert(classes_cache_[offset] == arena_manager_.get_arena(classes_[offset].top()));
         return (arena<ArenaSize, SizeClass, 8>*)classes_cache_[offset];        
     }
 
