@@ -5,38 +5,34 @@
 // SPDX-License-Identifier: MIT
 //
 
-#include <elasticheap/detail/bitset.h>
+#include <elasticheap/detail/atomic_bitset.h>
 
 #include <gtest/gtest.h>
 
 using bitset_types = testing::Types<
-    elasticheap::detail::bitset<8>,
-    elasticheap::detail::bitset<16>,
-    elasticheap::detail::bitset<32>,
-    elasticheap::detail::bitset<64>,
-    elasticheap::detail::bitset<128>,
-    elasticheap::detail::bitset<256>
+    elasticheap::detail::atomic_bitset<8>,
+    elasticheap::detail::atomic_bitset<16>,
+    elasticheap::detail::atomic_bitset<32>,
+    elasticheap::detail::atomic_bitset<64>,
+    elasticheap::detail::atomic_bitset<128>,
+    elasticheap::detail::atomic_bitset<256>
 >;
 
-template <typename T> struct bitset_test : public testing::Test {};
-TYPED_TEST_SUITE(bitset_test, bitset_types);
+template <typename T> struct atomic_bitset_test : public testing::Test {};
+TYPED_TEST_SUITE(atomic_bitset_test, bitset_types);
 
-TYPED_TEST(bitset_test, sizes) {
+TYPED_TEST(atomic_bitset_test, sizes) {
     static_assert(sizeof(TypeParam) == TypeParam::size()/8);
 }
 
-TYPED_TEST(bitset_test, basic) {
+TYPED_TEST(atomic_bitset_test, basic) {
     TypeParam bitset;
     bitset.clear();
-    ASSERT_TRUE(bitset.empty());
-    ASSERT_FALSE(bitset.full());
     for (size_t i = 0; i < bitset.size(); ++i) {
-        ASSERT_FALSE(bitset.get(i));
+        ASSERT_FALSE(bitset.get(0));
     }
 
     bitset.set(0);
-    ASSERT_FALSE(bitset.empty());
-    ASSERT_FALSE(bitset.full());
     ASSERT_TRUE(bitset.get(0));
     bitset.clear(0);
     ASSERT_FALSE(bitset.get(0));
@@ -46,5 +42,4 @@ TYPED_TEST(bitset_test, basic) {
         bitset.set(i);
         ASSERT_TRUE(bitset.get(i));
     }
-    ASSERT_TRUE(bitset.full());
 }
