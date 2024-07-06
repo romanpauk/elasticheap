@@ -98,6 +98,7 @@ if(ELASTICHEAP_ENABLE_TESTING)
         test/allocator.cpp
         test/atomic_bitset.cpp
         test/bitset.cpp
+        test/bitset_heap.cpp
     )
 
     add_test(NAME elasticheap_test COMMAND elasticheap_test)

@@ -56,6 +56,7 @@ template< typename T, std::size_t Capacity > struct bitset_heap {
     }
 
     std::size_t size() const { return size_; }
+    static constexpr std::size_t capacity() { return Capacity; }
 
 private:
     std::size_t size_ = 0;
