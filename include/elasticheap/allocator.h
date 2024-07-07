@@ -44,6 +44,7 @@
 #define __assume(cond) do { if (!(cond)) __builtin_unreachable(); } while (0)
 
 //#define STATS
+//#define THREADS
 
 namespace elasticheap {
 
@@ -81,7 +82,17 @@ template < std::size_t Alignment, typename T > T* mask(T* ptr) {
     return (T*)((uintptr_t)ptr & ~(Alignment - 1));
 }
 
+#if defined(THREADS)
+static thread_local uint64_t thread_token;
+inline uint64_t thread_id() {
+    return (uint64_t)&thread_token;
+}
+#endif
+
 struct arena_metadata {
+#if defined(THREADS)
+    uint64_t tid_;
+#endif
     uint8_t* begin_;
     uint32_t index_;
     uint32_t free_list_size_;
@@ -97,9 +108,12 @@ template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class
     static_assert(Count <= std::numeric_limits<uint16_t>::max());
 
     uint16_t  free_list_[Count];
-    
+
 public:
     arena() {
+    #if defined(THREADS)
+        tid_ = thread_id();
+    #endif
         begin_ = (uint8_t*)this + sizeof(*this);
         free_list_size_ = index_ = 0;
         size_class_ = Size;
@@ -127,6 +141,10 @@ public:
     }
     
     void deallocate(void* ptr) {
+    #if defined(THREADS)
+        if (tid_ != thread_id())
+            std::abort();
+    #endif
         assert(size_class_ == Size);
         assert(is_ptr_valid(ptr));
         size_t index = ((uint8_t*)ptr - begin_) / Size;
