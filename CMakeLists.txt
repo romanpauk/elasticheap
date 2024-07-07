@@ -12,6 +12,8 @@ endif()
 include(cmake/md.cmake)
 include(cmake/sanitizers.cmake)
 
+#add_compile_options(-march=x86-64-v2 -save-temps -fverbose-asm -masm=intel)
+
 sanitizers_init(ELASTICHEAP)
 
 # TODO: g++ -Wall -Wextra -Wpedantic -Q --help=warning | grep disabled
@@ -68,12 +70,15 @@ target_sources(elasticheap INTERFACE
     include/elasticheap/detail/atomic_bitset.h
     include/elasticheap/detail/atomic_bitset_heap.h
     include/elasticheap/detail/bitset.h
+    include/elasticheap/detail/bitset_heap.h
     README.md
 )
 
 if(ELASTICHEAP_ENABLE_BENCHMARK)
     add_executable(elasticheap_benchmark
         benchmark/allocator.cpp
+        benchmark/bitset.cpp
+        benchmark/bitset_heap.cpp
         benchmark/main.cpp
         benchmark/page_manager.cpp
     )

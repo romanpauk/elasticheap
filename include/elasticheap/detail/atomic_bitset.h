@@ -33,24 +33,24 @@ namespace elasticheap::detail {
         using value_type = std::atomic<T>;
         static constexpr std::size_t size() { return Bits; }
 
-        void clear() {
+        void clear(std::memory_order order = std::memory_order_relaxed) {
             for(std::size_t i = 0; i < Size; ++i)
-                values_[i].store(0, std::memory_order_relaxed);
+                values_[i].store(0, order);
         }
 
-        void set(std::size_t index) {
+        void set(std::size_t index, std::memory_order order = std::memory_order_relaxed) {
             assert(index < Bits);
-            values_[index/sizeof(T)/8].fetch_or(T{1} << (index & (sizeof(T) * 8 - 1)), std::memory_order_release);
+            values_[index/sizeof(T)/8].fetch_or(T{1} << (index & (sizeof(T) * 8 - 1)), order);
         }
 
-        void clear(std::size_t index) {
+        void clear(std::size_t index, std::memory_order order = std::memory_order_relaxed) {
             assert(index < Bits);
-            values_[index/sizeof(T)/8].fetch_and(~(T{1} << (index & (sizeof(T) * 8 - 1))), std::memory_order_release);
+            values_[index/sizeof(T)/8].fetch_and(~(T{1} << (index & (sizeof(T) * 8 - 1))), order);
         }
 
-        bool get(std::size_t index) const {
+        bool get(std::size_t index, std::memory_order order = std::memory_order_relaxed) const {
             assert(index < Bits);
-            return values_[index/sizeof(T)/8].load(std::memory_order_acquire) & (T{1} << (index & (sizeof(T) * 8 - 1)));
+            return values_[index/sizeof(T)/8].load(order) & (T{1} << (index & (sizeof(T) * 8 - 1)));
         }
 
         /*bool empty() const {
@@ -78,21 +78,21 @@ namespace elasticheap::detail {
         using value_type = std::atomic<T>;
         static constexpr std::size_t size() { return Bits; }
         
-        void clear() { value_.store(0, std::memory_order_relaxed); }
+        void clear(std::memory_order order = std::memory_order_relaxed) { value_.store(0, order); }
         
-        void set(std::size_t index) {
+        void set(std::size_t index, std::memory_order order = std::memory_order_relaxed) {
             assert(index < Bits);
-            value_.fetch_or(T{1} << index, std::memory_order_release);
+            value_.fetch_or(T{1} << index, order);
         }
 
-        void clear(std::size_t index) {
+        void clear(std::size_t index, std::memory_order order = std::memory_order_relaxed) {
             assert(index < Bits);
-            value_.fetch_and(~(T{1} << index), std::memory_order_release);
+            value_.fetch_and(~(T{1} << index), order);
         }
 
-        bool get(std::size_t index) const {
+        bool get(std::size_t index, std::memory_order order = std::memory_order_relaxed) const {
             assert(index < Bits);
-            return value_.load(std::memory_order_acquire) & (T{1} << index);
+            return value_.load(order) & (T{1} << index);
         }
 
         //bool empty() const { return value_.load(std::memory_order_relaxed) == 0; }

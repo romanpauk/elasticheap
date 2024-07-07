@@ -23,8 +23,8 @@ template< typename T, std::size_t Capacity > struct bitset_heap {
         assert(!bitmap_.get(value));
         bitmap_.set(value);
         ++size_;
-        if (min_ > value) min_ = value;
-        if (max_ < value) max_ = value;
+        min_ = min_ > value ? value : min_;
+        max_ = max_ < value ? value : max_;
     }
 
     bool empty() const {
