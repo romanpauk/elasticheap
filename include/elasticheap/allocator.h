@@ -95,27 +95,46 @@ struct arena_metadata {
 #endif
     uint8_t* begin_;
     uint32_t index_;
-    uint32_t free_list_size_;
     uint32_t size_class_;
+};
+
+template< std::size_t Size > struct arena_free_list {
+    static_assert(Size <= std::numeric_limits<uint16_t>::max());
+
+    uint32_t size_;
+    uint16_t values_[Size];
+
+    void push(uint16_t value) {
+        assert(value < Size);
+        assert(size_ < Size);
+        values_[size_++] = value;
+    }
+
+    bool pop(uint16_t& value) {
+        if (size_) {
+            value = values_[--size_];
+            return true;
+        }
+        return false;
+    }
+
+    uint32_t size() const { return size_; }
 };
 
 template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena
     : public arena_metadata
 { 
     static_assert((ArenaSize & (ArenaSize - 1)) == 0);
-
-    static constexpr std::size_t Count = (ArenaSize - sizeof(arena_metadata))/(Size + 2);
-    static_assert(Count <= std::numeric_limits<uint16_t>::max());
-
-    uint16_t  free_list_[Count];
-
+    static constexpr std::size_t Count = (ArenaSize - sizeof(arena_metadata) - sizeof(uint32_t))/(Size + 2);
+    
+    arena_free_list<Count> free_list_ = {0};
 public:
     arena() {
     #if defined(THREADS)
         tid_ = thread_id();
     #endif
         begin_ = (uint8_t*)this + sizeof(*this);
-        free_list_size_ = index_ = 0;
+        index_ = 0;
         size_class_ = Size;
     }
 
@@ -125,8 +144,8 @@ public:
     void* allocate() {
         assert(size_class_ == Size);
         uint8_t* ptr = 0;
-        if (free_list_size_) {
-            uint16_t index = free_list_[--free_list_size_];
+        uint16_t index = 0;
+        if (free_list_.pop(index)) {
             assert(index < Count);
             ptr = begin_ + index * Size;
         } else {
@@ -148,14 +167,12 @@ public:
         assert(size_class_ == Size);
         assert(is_ptr_valid(ptr));
         size_t index = ((uint8_t*)ptr - begin_) / Size;
-        assert(index < Count);
-        assert(free_list_size_ < Count);
-        free_list_[free_list_size_++] = index;
+        free_list_.push(index);
     }
 
     static constexpr std::size_t capacity() { return Count; }
 
-    std::size_t size() const { return index_ - free_list_size_; }
+    std::size_t size() const { return index_ - free_list_.size(); }
 
 private:
     bool is_ptr_valid(void* ptr) {
