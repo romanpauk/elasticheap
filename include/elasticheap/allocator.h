@@ -98,10 +98,30 @@ struct arena_metadata {
     uint32_t size_class_;
 };
 
-template< std::size_t Size > struct arena_free_list {
+template< std::size_t Size > struct arena_free_list1 {
     static_assert(Size <= std::numeric_limits<uint16_t>::max());
 
-    uint32_t size_;
+    uint32_t size_ = Size;
+    uint16_t values_[Size];
+
+    void push(uint16_t value) {
+        assert(value < Size);
+        assert(size_ > 0);
+        values_[--size_] = value;
+    }
+
+    uint16_t pop() {
+        assert(size_ < Size);
+        return values_[size_++];
+    }
+
+    uint32_t size() const { return Size - size_; }
+};
+
+template< std::size_t Size > struct arena_free_list2 {
+    static_assert(Size <= std::numeric_limits<uint16_t>::max());
+
+    uint32_t size_ = 0;
     uint16_t values_[Size];
 
     void push(uint16_t value) {
@@ -110,12 +130,9 @@ template< std::size_t Size > struct arena_free_list {
         values_[size_++] = value;
     }
 
-    bool pop(uint16_t& value) {
-        if (size_) {
-            value = values_[--size_];
-            return true;
-        }
-        return false;
+    uint16_t pop() {
+        assert(size_ > 0);
+        return values_[--size_];
     }
 
     uint32_t size() const { return size_; }
@@ -127,7 +144,8 @@ template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class
     static_assert((ArenaSize & (ArenaSize - 1)) == 0);
     static constexpr std::size_t Count = (ArenaSize - sizeof(arena_metadata) - sizeof(uint32_t))/(Size + 2);
     
-    arena_free_list<Count> free_list_ = {0};
+    arena_free_list2<Count> free_list_;
+
 public:
     arena() {
     #if defined(THREADS)
@@ -136,6 +154,9 @@ public:
         begin_ = (uint8_t*)this + sizeof(*this);
         index_ = 0;
         size_class_ = Size;
+
+        for(std::size_t i = Count - 1; i > 0; --i)
+            free_list_.push(i);
     }
 
     uint8_t* begin() const { return begin_; }
@@ -143,19 +164,11 @@ public:
     
     void* allocate() {
         assert(size_class_ == Size);
-        uint8_t* ptr = 0;
-        uint16_t index = 0;
-        if (free_list_.pop(index)) {
-            assert(index < Count);
-            ptr = begin_ + index * Size;
-        } else {
-            if (index_ == Count)
-                return 0;
-            ptr = begin_ + index_++ * Size;
-        }
-
+        uint8_t* ptr;
+        uint16_t index = free_list_.pop();
+        assert(index < Count);
+        ptr = begin_ + index * Size;
         assert(is_ptr_valid(ptr));
-        __assume(ptr != 0);
         return ptr;
     }
     
@@ -172,7 +185,7 @@ public:
 
     static constexpr std::size_t capacity() { return Count; }
 
-    std::size_t size() const { return index_ - free_list_.size(); }
+    std::size_t size() const { return Count - free_list_.size(); }
 
 private:
     bool is_ptr_valid(void* ptr) {
@@ -577,10 +590,8 @@ protected:
     template< size_t SizeClass > void* allocate_impl() {
     again:
         auto arena = get_cached_arena<SizeClass>();
-        auto ptr = arena->allocate();
-        if (ptr) {
-            return ptr;
-        }
+        if (arena->size() < arena->capacity())
+            return arena->allocate();
 
         assert(arena->size() == arena->capacity());
         pop_arena<SizeClass>();
