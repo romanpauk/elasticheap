@@ -101,6 +101,26 @@ struct arena_metadata {
 template< std::size_t Size > struct arena_free_list1 {
     static_assert(Size <= std::numeric_limits<uint16_t>::max());
 
+    uint32_t size_ = 0;
+    std::array<uint16_t, Size> values_;
+
+    void push(uint16_t value) {
+        assert(value < Size);
+        assert(size_ < Size);
+        values_[size_++] = value;
+    }
+
+    uint16_t pop() {
+        assert(size_ > 0);
+        return values_[--size_];
+    }
+
+    uint32_t size() const { return size_; }
+};
+
+template< std::size_t Size > struct arena_free_list2 {
+    static_assert(Size <= std::numeric_limits<uint16_t>::max());
+
     uint32_t size_ = Size;
     uint16_t values_[Size];
 
@@ -118,33 +138,13 @@ template< std::size_t Size > struct arena_free_list1 {
     uint32_t size() const { return Size - size_; }
 };
 
-template< std::size_t Size > struct arena_free_list2 {
-    static_assert(Size <= std::numeric_limits<uint16_t>::max());
-
-    uint32_t size_ = 0;
-    uint16_t values_[Size];
-
-    void push(uint16_t value) {
-        assert(value < Size);
-        assert(size_ < Size);
-        values_[size_++] = value;
-    }
-
-    uint16_t pop() {
-        assert(size_ > 0);
-        return values_[--size_];
-    }
-
-    uint32_t size() const { return size_; }
-};
-
 template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena
     : public arena_metadata
 { 
     static_assert((ArenaSize & (ArenaSize - 1)) == 0);
     static constexpr std::size_t Count = (ArenaSize - sizeof(arena_metadata) - sizeof(uint32_t))/(Size + 2);
     
-    arena_free_list2<Count> free_list_;
+    arena_free_list1<Count> free_list_;
 
 public:
     arena() {
@@ -677,7 +677,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std:
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<void*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_cache_;
 
 template <typename T > class allocator
-    : public arena_allocator_base< 1<<21, 1<<18, 1ull<<40> 
+    : public arena_allocator_base< 1<<21, 1<<17, 1ull<<40> 
 {
     template <typename U> friend class allocator;
     
