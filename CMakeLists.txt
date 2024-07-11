@@ -12,7 +12,7 @@ endif()
 include(cmake/md.cmake)
 include(cmake/sanitizers.cmake)
 
-#add_compile_options(-march=x86-64-v2 -save-temps -fverbose-asm -masm=intel)
+add_compile_options(-march=native -save-temps -fverbose-asm -masm=intel)
 
 sanitizers_init(ELASTICHEAP)
 

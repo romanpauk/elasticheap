@@ -23,10 +23,6 @@
 #include <mutex>
 #include <stdexcept>
 
-#if defined(_WIN32)
-#include <immintrin.h>
-#endif
-
 #include <sys/mman.h>
 #include <stdio.h>
 
@@ -80,6 +76,17 @@ template < std::size_t Alignment, typename T > T* align(T* ptr) {
 template < std::size_t Alignment, typename T > T* mask(T* ptr) {
     static_assert((Alignment & (Alignment - 1)) == 0);
     return (T*)((uintptr_t)ptr & ~(Alignment - 1));
+}
+
+static constexpr uint32_t round_up(uint32_t v) {
+    v--;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    v++;
+    return v;
 }
 
 #if defined(THREADS)
@@ -138,9 +145,79 @@ template< std::size_t Size > struct arena_free_list2 {
     uint32_t size() const { return Size - size_; }
 };
 
+template< std::size_t Size > struct arena_free_list3 {
+    static_assert(Size <= 64 * 256);
+
+    uint32_t size_ = 0;
+    detail::bitset<256> index_;
+    std::array< detail::bitset<64>, 256 > bitmap_;
+
+    arena_free_list3() {
+        //index_.clear();
+        //for(auto& bitmap: bitmap_) bitmap.clear();
+    }
+
+    void push(uint16_t value) {
+        assert(value < Size);
+        assert(size_ < Size);
+        index_.set(value >> 6);
+        bitmap_[value >> 6].set(value & 63);
+        size_++;
+    }
+
+    uint16_t pop() {
+        auto hi = index_.find_first();
+        auto lo = bitmap_[hi].find_first();
+        bitmap_[hi].clear(lo);
+        if (bitmap_[hi].empty())
+            index_.clear(hi);
+        --size_;
+        return (hi << 6) | lo;
+    }
+
+    uint32_t size() const { return size_; }
+};
+
+template< std::size_t Size > struct arena_free_list4 {
+    static_assert(Size <= 64 * 256);
+
+    uint32_t size_ = 0;
+    std::array< uint8_t, 256 > index_;
+    std::array< detail::bitset<64>, 256 > bitmap_;
+
+    arena_free_list4() {
+        for(std::size_t i = 0; i < index_.size(); ++i)
+            index_[i] = 0;
+        
+        for(auto& bitmap: bitmap_) bitmap.clear();
+    }
+
+    void push(uint16_t value) {
+        assert(value < Size);
+        assert(size_ < Size);
+        ++index_[value >> 6];
+        bitmap_[value >> 6].set(value & 63);
+        ++size_;
+    }
+
+    uint16_t pop() {
+        for(size_t i = 0; i < index_.size(); ++i) {
+            if (!index_[i]) continue;
+            auto hi = i;
+            auto lo = bitmap_[hi].find_first();
+            --index_[hi];
+            bitmap_[hi].clear(lo);
+            --size_;
+            return (hi << 6) | lo;
+        }
+    }
+
+    uint32_t size() const { return size_; }
+};
+
 template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena
     : public arena_metadata
-{ 
+{
     static_assert((ArenaSize & (ArenaSize - 1)) == 0);
     static constexpr std::size_t Count = (ArenaSize - sizeof(arena_metadata) - sizeof(uint32_t))/(Size + 2);
     
@@ -534,18 +611,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > cla
 
     static constexpr std::size_t PageArenaCount = (PageSize)/(ArenaSize);
     
-protected:    
-    static constexpr uint32_t round_up(uint32_t v) {
-        v--;
-        v |= v >> 1;
-        v |= v >> 2;
-        v |= v >> 4;
-        v |= v >> 8;
-        v |= v >> 16;
-        v++;
-        return v;
-    }
-
+protected:
     static constexpr size_t log2(size_t n) { return ((n<2) ? 1 : 1 + log2(n/2)); }
 
     static constexpr size_t size_class(size_t n) { return round_up(std::max(n, 8lu)); }
@@ -677,7 +743,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std:
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<void*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_cache_;
 
 template <typename T > class allocator
-    : public arena_allocator_base< 1<<21, 1<<17, 1ull<<40> 
+    : public arena_allocator_base< 1<<21, 1<<17, 1ull<<40 > 
 {
     template <typename U> friend class allocator;
     

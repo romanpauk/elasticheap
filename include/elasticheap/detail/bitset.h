@@ -9,8 +9,11 @@
 
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <type_traits>
+
+#include <x86gprintrin.h>
 
 namespace elasticheap::detail {
     template< std::size_t Bits > struct bitset_type {
@@ -64,6 +67,14 @@ namespace elasticheap::detail {
             return true;
         }
 
+        std::size_t find_first() const {
+            for(std::size_t i = 0; i < Size; ++i) {
+                if (values_[i])
+                    return _tzcnt_u64(values_[i]);
+            }
+            return Size;
+        }
+
     private:
         T values_[Size];
     };
@@ -97,6 +108,9 @@ namespace elasticheap::detail {
         bool empty() const { return value_ == 0; }
         bool full() const { return value_ == std::numeric_limits<T>::max(); }
         
+        std::size_t find_first() const {
+            return _tzcnt_u64(value_);
+        }
     private:
         T value_;
     };

@@ -16,8 +16,8 @@
 static void arena_allocator_allocate_uint64_t_arena_only(benchmark::State& state) {
     static uint8_t buffer[1<<20];
     
-    auto* arena = reinterpret_cast<elasticheap::arena< 1<<19, 8, 8 >*>(buffer);
-    new (arena) elasticheap::arena< 1<<19, 8, 8 >();
+    auto* arena = reinterpret_cast<elasticheap::arena< 1<<17, 8, 8 >*>(buffer);
+    new (arena) elasticheap::arena< 1<<17, 8, 8 >();
     std::vector< void* > pointers(state.range());
         
     for (auto _ : state) {
