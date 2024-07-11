@@ -11,7 +11,7 @@
 
 static void arena_free_list_uint16_t(benchmark::State& state) {
     uint32_t size = 0;
-    elasticheap::arena_free_list3< uint16_t, 1<<14 > values;
+    elasticheap::arena_free_list4< uint16_t, 1<<14 > values;
 
     uint16_t tmp = 0;
     for (auto _ : state) {

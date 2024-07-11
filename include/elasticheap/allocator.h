@@ -216,6 +216,7 @@ template< typename T, std::size_t Size > struct arena_free_list4 {
         assert(value < Size);
         index_.set(value >> 6);
         bitmap_[value >> 6].set(value & 63);
+        assert(bitmap_size_ < Size);
         ++bitmap_size_;
     }
 
@@ -224,17 +225,23 @@ template< typename T, std::size_t Size > struct arena_free_list4 {
         uint64_t lo = bitmap_[hi];
         bitmap_[hi].clear();
         index_.clear(hi);
+        assert(bitmap_size_ >= _mm_popcnt_u64(lo));
         bitmap_size_ -= _mm_popcnt_u64(lo);
         return {hi << 6, lo};
     }
 
+    // metadata
+    detail::bitset< 256 > index_;
     uint32_t stack_size_ = 0;
     uint32_t bitmap_size_ = 0;
-
-    detail::bitset< 256 > index_;
     
-    std::array< uint16_t, 1024 > stack_;
-    std::array< detail::bitset< 64 >, 256 > bitmap_;
+    // detail::atomic_bitset< 256 > atomic_index_;
+    //std::atomic<uint32_t> atomic_bitmap_size_ = 0;
+
+    // and two pages
+    std::array< uint16_t, 2048 > stack_; // 1st page
+    std::array< detail::bitset< 64 >, 256 > bitmap_; // 2nd page (with atomic portion)
+    //std::array< detail::bitset< 64 >, 256 > atomic_bitmap_;
 };
 
 template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena
