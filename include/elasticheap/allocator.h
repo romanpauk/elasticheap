@@ -96,7 +96,7 @@ inline uint64_t thread_id() {
 }
 #endif
 
-struct arena_metadata {
+struct arena_descriptor {
 #if defined(THREADS)
     uint64_t tid_;
 #endif
@@ -245,13 +245,13 @@ template< typename T, std::size_t Size > struct arena_free_list4 {
 };
 
 template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena
-    : public arena_metadata
+    : public arena_descriptor
 {
     static_assert((ArenaSize & (ArenaSize - 1)) == 0);
 
     // TODO: move all metadata elsewhere
-    static constexpr std::size_t Count = (ArenaSize - sizeof(arena_metadata))/(Size + 2);
-    //static constexpr std::size_t Count = round_up((ArenaSize - sizeof(arena_metadata))/(Size + 2))/2;
+    static constexpr std::size_t Count = (ArenaSize - sizeof(arena_descriptor))/(Size + 2);
+    //static constexpr std::size_t Count = round_up((ArenaSize - sizeof(arena_descriptor))/(Size + 2))/2;
     
     //arena_free_list< uint16_t, round_up(Count) > free_list_;
     //arena_free_list2< uint16_t, Count > free_list_;
@@ -519,7 +519,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         Full = 2,
     };
 
-    struct page_metadata {
+    struct page_descriptor {
         uint8_t state;
         detail::bitset<PageSize/ArenaSize> bitmap;
     };
@@ -527,8 +527,8 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
     void* get_allocated_page() {
         while(!allocated_pages_.empty()) {
             void* page = page_manager_.get_page(allocated_pages_.top());
-            auto& metadata = get_page_metadata(page);
-            if (metadata.state == PageState::Deallocated) {
+            auto& pdesc= get_page_descriptor(page);
+            if (pdesc.state == PageState::Deallocated) {
                 allocated_pages_.pop();
                 continue;
             }
@@ -536,25 +536,25 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         }
 
         void* page = page_manager_.allocate_page();
-        auto& metadata = get_page_metadata(page);
-        metadata.bitmap.clear();
-        metadata.state = PageState::Allocated;
+        auto& pdesc = get_page_descriptor(page);
+        pdesc.bitmap.clear();
+        pdesc.state = PageState::Allocated;
         allocated_pages_.push(page_manager_.get_page_index(page));
         return page;
     }
 
     void* allocate_arena() {
         void* page = get_allocated_page();
-        auto& metadata = get_page_metadata(page);
-        assert(!metadata.bitmap.full());
-        assert(metadata.state == PageState::Allocated);
+        auto& pdesc = get_page_descriptor(page);
+        assert(!pdesc.bitmap.full());
+        assert(pdesc.state == PageState::Allocated);
         
         void* arena = 0;
         for (size_t i = 0; i < PageArenaCount; ++i) {
-            if (!metadata.bitmap.get(i)) {
-                metadata.bitmap.set(i);
+            if (!pdesc.bitmap.get(i)) {
+                pdesc.bitmap.set(i);
                 arena = (uint8_t*)page + ArenaSize * i;
-                if (metadata.bitmap.full()) {
+                if (pdesc.bitmap.full()) {
                     assert(page_manager_.get_page(allocated_pages_.top()) == page);
                     allocated_pages_.pop();
                 }
@@ -590,17 +590,17 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
     void deallocate_arena(void* ptr) {
         assert(is_arena_valid(ptr));
         void* page = page_manager_.get_page(ptr);
-        auto& metadata = get_page_metadata(page);
-        assert(metadata.state == PageState::Allocated);
+        auto& pdesc = get_page_descriptor(page);
+        assert(pdesc.state == PageState::Allocated);
 
-        if (metadata.bitmap.full())
+        if (pdesc.bitmap.full())
             allocated_pages_.push(page_manager_.get_page_index(page));
 
         int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
         assert(index < PageArenaCount);
-        metadata.bitmap.clear(index);
-        if (metadata.bitmap.empty()) {        
-            metadata.state = PageState::Deallocated;
+        pdesc.bitmap.clear(index);
+        if (pdesc.bitmap.empty()) {        
+            pdesc.state = PageState::Deallocated;
             page_manager_.deallocate_page(page);
         }
 
@@ -612,18 +612,18 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
     template< std::size_t SizeClass > bool get_arena_state(void* ptr) {
         assert(is_arena_valid(ptr));
         void* page = page_manager_.get_page(ptr);
-        auto& metadata = get_page_metadata(page);
-        if (metadata.state == PageState::Allocated) {
-            auto& ametadata = *(arena_metadata*)ptr;
+        auto& pdesc = get_page_descriptor(page);
+        if (pdesc.state == PageState::Allocated) {
+            auto& adesc = *(arena_descriptor*)ptr;
             int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
-            return metadata.bitmap.get(index) && ametadata.size_class_ == SizeClass;
+            return pdesc.bitmap.get(index) && adesc.size_class_ == SizeClass;
         }
         return false;
     }
 
 private:
-    page_metadata& get_page_metadata(void* page) {
-        return metadata_[page_manager_.get_page_index(page)];
+    page_descriptor& get_page_descriptor(void* page) {
+        return page_descriptors_[page_manager_.get_page_index(page)];
     }
 
     bool is_arena_valid(void* ptr) const {
@@ -634,7 +634,7 @@ private:
 
     page_manager< PageSize, MaxSize > page_manager_;
     detail::bitset_heap< uint32_t, PageCount > allocated_pages_;
-    page_metadata metadata_[PageCount];
+    page_descriptor page_descriptors_[PageCount];
 };
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > class arena_allocator_base {
