@@ -13,17 +13,18 @@
 static void bitset_heap(benchmark::State& state) {
     elasticheap::detail::bitset_heap<uint16_t, 1<<15> values;
 
+    uint16_t tmp = 0;
     for (auto _ : state) {
         for(size_t j = 0; j < state.range(); ++j) {
             values.push(j);
         }
             
         for(size_t j = 0; j < state.range(); ++j) {
-            values.pop();
+            tmp = values.pop();
         }
     }
 
-    benchmark::DoNotOptimize(values.empty());
+    benchmark::DoNotOptimize(tmp);
     state.SetItemsProcessed(state.iterations() * state.range());
 }
 

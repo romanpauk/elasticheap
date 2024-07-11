@@ -1,5 +1,5 @@
 //
-// This file is part of containers project <https://github.com/romanpauk/elasticheap>
+// This file is part of elasticheap project <https://github.com/romanpauk/elasticheap>
 //
 // See LICENSE for license and copyright information
 // SPDX-License-Identifier: MIT
@@ -7,6 +7,7 @@
 
 #include <elasticheap/detail/bitset.h>
 #include <elasticheap/detail/atomic_bitset.h>
+#include <elasticheap/allocator.h>
 
 #include <benchmark/benchmark.h>
 

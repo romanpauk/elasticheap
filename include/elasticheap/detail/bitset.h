@@ -13,7 +13,7 @@
 #include <limits>
 #include <type_traits>
 
-#include <x86gprintrin.h>
+#include <immintrin.h>
 
 namespace elasticheap::detail {
     template< std::size_t Bits > struct bitset_type {

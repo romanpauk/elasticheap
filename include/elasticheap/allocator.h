@@ -103,151 +103,41 @@ struct arena_metadata {
     uint8_t* begin_;
     uint32_t index_;
     uint32_t size_class_;
+    uint32_t free_list_size_;
 };
 
-template< std::size_t Size > struct arena_free_list1 {
-    static_assert(Size <= std::numeric_limits<uint16_t>::max());
+template< typename T, std::size_t Size > struct arena_free_list {
+    static_assert(Size <= std::numeric_limits<T>::max());
 
-    uint32_t size_ = 0;
-    std::array<uint16_t, Size> values_;
+    detail::bitset<Size> bitmap_;
 
-    void push(uint16_t value) {
-        assert(value < Size);
-        assert(size_ < Size);
-        values_[size_++] = value;
-    }
-
-    uint16_t pop() {
-        assert(size_ > 0);
-        return values_[--size_];
-    }
-
-    uint32_t size() const { return size_; }
-};
-
-template< std::size_t Size > struct arena_free_list2 {
-    static_assert(Size <= std::numeric_limits<uint16_t>::max());
-
-    uint32_t size_ = Size;
-    uint16_t values_[Size];
-
-    void push(uint16_t value) {
-        assert(value < Size);
-        assert(size_ > 0);
-        values_[--size_] = value;
-    }
-
-    uint16_t pop() {
-        assert(size_ < Size);
-        return values_[size_++];
-    }
-
-    uint32_t size() const { return Size - size_; }
-};
-
-template< std::size_t Size > struct arena_free_list3 {
-    static_assert(Size <= 64 * 256);
-
-    uint32_t size_ = 0;
-    detail::bitset<256> index_;
-    std::array< detail::bitset<64>, 256 > bitmap_;
-
-    arena_free_list3() {
-        //index_.clear();
-        //for(auto& bitmap: bitmap_) bitmap.clear();
-    }
-
-    void push(uint16_t value) {
-        assert(value < Size);
-        assert(size_ < Size);
-        index_.set(value >> 6);
-        bitmap_[value >> 6].set(value & 63);
-        size_++;
-    }
-
-    uint16_t pop() {
-        auto hi = index_.find_first();
-        auto lo = bitmap_[hi].find_first();
-        bitmap_[hi].clear(lo);
-        if (bitmap_[hi].empty())
-            index_.clear(hi);
-        --size_;
-        return (hi << 6) | lo;
-    }
-
-    uint32_t size() const { return size_; }
-};
-
-template< std::size_t Size > struct arena_free_list4 {
-    static_assert(Size <= 64 * 256);
-
-    uint32_t size_ = 0;
-    std::array< uint8_t, 256 > index_;
-    std::array< detail::bitset<64>, 256 > bitmap_;
-
-    arena_free_list4() {
-        for(std::size_t i = 0; i < index_.size(); ++i)
-            index_[i] = 0;
-        
-        for(auto& bitmap: bitmap_) bitmap.clear();
-    }
-
-    void push(uint16_t value) {
-        assert(value < Size);
-        assert(size_ < Size);
-        ++index_[value >> 6];
-        bitmap_[value >> 6].set(value & 63);
-        ++size_;
-    }
-
-    uint16_t pop() {
-        for(size_t i = 0; i < index_.size(); ++i) {
-            if (!index_[i]) continue;
-            auto hi = i;
-            auto lo = bitmap_[hi].find_first();
-            --index_[hi];
-            bitmap_[hi].clear(lo);
-            --size_;
-            return (hi << 6) | lo;
-        }
-    }
-
-    uint32_t size() const { return size_; }
-};
-
-template< std::size_t Size > struct arena_free_list5 {
-    static_assert(Size <= 64 * 256);
-
-    uint32_t size_ = 0;
-    detail::bitset<64 * 256> bitmap_;
-
-    arena_free_list5() {
+    arena_free_list() {
         bitmap_.clear();
     }
 
-    void push(uint16_t value) {
+    void push(T value, uint32_t& size) {
         assert(value < Size);
-        assert(size_ < Size);
+        assert(size < Size);
         bitmap_.set(value);
-        ++size_;
+        ++size;
     }
 
-    uint16_t pop() {
-        assert(size_);
-        --size_;
+    T pop(uint32_t& size) {
+        assert(size);
+        --size;
         return bitmap_.find_first();
     }
-
-    uint32_t size() const { return size_; }
 };
 
 template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena
     : public arena_metadata
 {
     static_assert((ArenaSize & (ArenaSize - 1)) == 0);
-    static constexpr std::size_t Count = (ArenaSize - sizeof(arena_metadata) - sizeof(uint32_t))/(Size + 2);
+
+    // TODO: move all metadata elsewhere
+    static constexpr std::size_t Count = (ArenaSize - sizeof(arena_metadata) - sizeof(uint32_t))/(Size + 1);
     
-    arena_free_list5<Count> free_list_;
+    arena_free_list< uint16_t, round_up(Count) > free_list_;
 
 public:
     arena() {
@@ -259,7 +149,7 @@ public:
         size_class_ = Size;
 
         for(std::size_t i = Count - 1; i > 0; --i)
-            free_list_.push(i);
+            free_list_.push(i, free_list_size_);
     }
 
     uint8_t* begin() const { return begin_; }
@@ -267,10 +157,9 @@ public:
     
     void* allocate() {
         assert(size_class_ == Size);
-        uint8_t* ptr;
-        uint16_t index = free_list_.pop();
+        uint16_t index = free_list_.pop(free_list_size_);
         assert(index < Count);
-        ptr = begin_ + index * Size;
+        uint8_t* ptr = begin_ + index * Size;
         assert(is_ptr_valid(ptr));
         return ptr;
     }
@@ -283,12 +172,12 @@ public:
         assert(size_class_ == Size);
         assert(is_ptr_valid(ptr));
         size_t index = ((uint8_t*)ptr - begin_) / Size;
-        free_list_.push(index);
+        free_list_.push(index, free_list_size_);
     }
 
     static constexpr std::size_t capacity() { return Count; }
 
-    std::size_t size() const { return Count - free_list_.size(); }
+    std::size_t size() const { return Count - free_list_size_; }
 
 private:
     bool is_ptr_valid(void* ptr) {
