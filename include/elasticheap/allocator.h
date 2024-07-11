@@ -125,7 +125,24 @@ template< typename T, std::size_t Size > struct arena_free_list {
     T pop(uint32_t& size) {
         assert(size);
         --size;
-        return bitmap_.find_first();
+        return bitmap_.pop_first();
+    }
+};
+
+template< typename T, std::size_t Size > struct arena_free_list2 {
+    static_assert(Size <= std::numeric_limits<T>::max());
+
+    T values_[Size];
+
+    void push(T value, uint32_t& size) {
+        assert(value < Size);
+        assert(size < Size);
+        values_[size++] = value;
+    }
+
+    T pop(uint32_t& size) {
+        assert(size);
+        return values_[--size];
     }
 };
 
@@ -135,9 +152,10 @@ template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class
     static_assert((ArenaSize & (ArenaSize - 1)) == 0);
 
     // TODO: move all metadata elsewhere
-    static constexpr std::size_t Count = (ArenaSize - sizeof(arena_metadata) - sizeof(uint32_t))/(Size + 1);
+    static constexpr std::size_t Count = (ArenaSize - sizeof(arena_metadata))/(Size + 2);
     
-    arena_free_list< uint16_t, round_up(Count) > free_list_;
+    arena_free_list2< uint16_t, Count > free_list_;
+    //arena_free_list< uint16_t, round_up(Count) > free_list_;
 
 public:
     arena() {
@@ -145,9 +163,8 @@ public:
         tid_ = thread_id();
     #endif
         begin_ = (uint8_t*)this + sizeof(*this);
-        index_ = 0;
         size_class_ = Size;
-
+        free_list_size_ = 0;
         for(std::size_t i = Count - 1; i > 0; --i)
             free_list_.push(i, free_list_size_);
     }

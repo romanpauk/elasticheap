@@ -70,7 +70,18 @@ namespace elasticheap::detail {
         std::size_t find_first() const {
             for(std::size_t i = 0; i < Size; ++i) {
                 if (values_[i])
-                    return _tzcnt_u64(values_[i]);
+                    return _tzcnt_u64(values_[i]) + i * sizeof(T) * 8;
+            }
+            return Size;
+        }
+
+        std::size_t pop_first() {
+            for(std::size_t i = 0; i < Size; ++i) {
+                if (values_[i]) {
+                    auto count = _tzcnt_u64(values_[i]);
+                    values_[i] &= ~(T{1} << count);
+                    return count + i * sizeof(T) * 8;
+                }
             }
             return Size;
         }
