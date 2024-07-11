@@ -215,13 +215,39 @@ template< std::size_t Size > struct arena_free_list4 {
     uint32_t size() const { return size_; }
 };
 
+template< std::size_t Size > struct arena_free_list5 {
+    static_assert(Size <= 64 * 256);
+
+    uint32_t size_ = 0;
+    detail::bitset<64 * 256> bitmap_;
+
+    arena_free_list5() {
+        bitmap_.clear();
+    }
+
+    void push(uint16_t value) {
+        assert(value < Size);
+        assert(size_ < Size);
+        bitmap_.set(value);
+        ++size_;
+    }
+
+    uint16_t pop() {
+        assert(size_);
+        --size_;
+        return bitmap_.find_first();
+    }
+
+    uint32_t size() const { return size_; }
+};
+
 template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena
     : public arena_metadata
 {
     static_assert((ArenaSize & (ArenaSize - 1)) == 0);
     static constexpr std::size_t Count = (ArenaSize - sizeof(arena_metadata) - sizeof(uint32_t))/(Size + 2);
     
-    arena_free_list1<Count> free_list_;
+    arena_free_list5<Count> free_list_;
 
 public:
     arena() {
