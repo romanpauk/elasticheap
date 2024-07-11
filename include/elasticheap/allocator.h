@@ -111,10 +111,6 @@ template< typename T, std::size_t Size > struct arena_free_list {
 
     detail::bitset<Size> bitmap_;
 
-    arena_free_list() {
-        bitmap_.clear();
-    }
-
     void push(T value, uint32_t& size) {
         assert(value < Size);
         assert(size < Size);
@@ -132,7 +128,7 @@ template< typename T, std::size_t Size > struct arena_free_list {
 template< typename T, std::size_t Size > struct arena_free_list2 {
     static_assert(Size <= std::numeric_limits<T>::max());
 
-    T values_[Size];
+    std::array< T, Size > values_;
 
     void push(T value, uint32_t& size) {
         assert(value < Size);
@@ -146,6 +142,101 @@ template< typename T, std::size_t Size > struct arena_free_list2 {
     }
 };
 
+template< typename T, std::size_t Size > struct arena_free_list3 {
+    static_assert(Size <= 64 * 256);
+    
+    detail::bitset< 256 > index_;
+    std::array< detail::bitset<64>, 256 > bitmap_;
+
+    void push(uint16_t value, uint32_t& size) {
+        assert(value < Size);
+        assert(size < Size);
+        index_.set(value >> 6);
+        bitmap_[value >> 6].set(value & 63);
+        ++size;
+    }
+
+    uint16_t pop(uint32_t& size) {
+        auto hi = index_.find_first();
+        auto lo = bitmap_[hi].find_first();
+        bitmap_[hi].clear(lo);
+        if (bitmap_[hi].empty())
+            index_.clear(hi);
+        --size;
+        return (hi << 6) | lo;
+    }
+};
+
+template< typename T, std::size_t Size > struct arena_free_list4 {
+    static_assert(Size <= 64 * 256);
+    
+    void push(uint16_t value, uint32_t& size) {
+        assert(value < Size);
+        if (stack_size_ < stack_.size()) {
+            stack_[stack_size_++] = value;
+        } else {
+            push_bitmap(value);
+        }
+        ++size;
+    }
+
+    uint16_t pop(uint32_t& size) {
+        if (!stack_size_) {
+            assert(size);
+            assert(bitmap_size_);
+            auto values = pop_bitmap();
+        #if 1
+            https://lemire.me/blog/2018/02/21/iterating-over-set-bits-quickly/
+            uint64_t bits = values.second;
+            while (bits != 0) {
+                uint64_t t = bits & -bits;
+                auto value = values.first | __builtin_ctzl(bits);
+                assert(value < Size);
+                stack_[stack_size_++] = value;
+                bits ^= t;
+            }
+        #else
+            for(size_t i = 0; i < 64; ++i) {
+                if (values.second & (1ull << i)) {
+                    auto value = values.first | i;
+                    assert(value < Size);
+                    stack_[stack_size_++] = value;
+                }
+            }
+        #endif
+        }
+
+        --size;
+        auto value = stack_[--stack_size_];
+        assert(value < Size);
+        return value;
+    }
+
+    void push_bitmap(uint16_t value) {
+        assert(value < Size);
+        index_.set(value >> 6);
+        bitmap_[value >> 6].set(value & 63);
+        ++bitmap_size_;
+    }
+
+    std::pair<uint64_t, uint64_t> pop_bitmap() {
+        auto hi = index_.find_first();
+        uint64_t lo = bitmap_[hi];
+        bitmap_[hi].clear();
+        index_.clear(hi);
+        bitmap_size_ -= _mm_popcnt_u64(lo);
+        return {hi << 6, lo};
+    }
+
+    uint32_t stack_size_ = 0;
+    uint32_t bitmap_size_ = 0;
+
+    detail::bitset< 256 > index_;
+    
+    std::array< uint16_t, 1024 > stack_;
+    std::array< detail::bitset< 64 >, 256 > bitmap_;
+};
+
 template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena
     : public arena_metadata
 {
@@ -153,9 +244,12 @@ template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class
 
     // TODO: move all metadata elsewhere
     static constexpr std::size_t Count = (ArenaSize - sizeof(arena_metadata))/(Size + 2);
+    //static constexpr std::size_t Count = round_up((ArenaSize - sizeof(arena_metadata))/(Size + 2))/2;
     
-    arena_free_list2< uint16_t, Count > free_list_;
     //arena_free_list< uint16_t, round_up(Count) > free_list_;
+    //arena_free_list2< uint16_t, Count > free_list_;
+    //arena_free_list3< uint16_t, round_up(Count) > free_list_;
+    arena_free_list4< uint16_t, Count > free_list_;
 
 public:
     arena() {

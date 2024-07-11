@@ -11,7 +11,7 @@
 
 static void arena_free_list_uint16_t(benchmark::State& state) {
     uint32_t size = 0;
-    elasticheap::arena_free_list< uint16_t, 1<<15 > values;
+    elasticheap::arena_free_list3< uint16_t, 1<<14 > values;
 
     uint16_t tmp = 0;
     for (auto _ : state) {
@@ -43,5 +43,5 @@ static void arena_free_list_uint32_t(benchmark::State& state) {
     state.SetItemsProcessed(state.iterations() * state.range());
 }
 
-BENCHMARK(arena_free_list_uint16_t)->Range(1, 1<<15)->UseRealTime();
+BENCHMARK(arena_free_list_uint16_t)->Range(1, 1<<14)->UseRealTime();
 BENCHMARK(arena_free_list_uint32_t)->Range(1, 1ull<<31)->UseRealTime();

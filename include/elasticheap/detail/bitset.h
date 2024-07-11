@@ -122,6 +122,9 @@ namespace elasticheap::detail {
         std::size_t find_first() const {
             return _tzcnt_u64(value_);
         }
+
+        operator T() const { return value_; }
+
     private:
         T value_;
     };
