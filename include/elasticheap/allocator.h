@@ -101,7 +101,6 @@ struct arena_descriptor {
     uint64_t tid_;
 #endif
     uint8_t* begin_;
-    uint32_t index_;
     uint32_t size_class_;
     uint32_t free_list_size_;
 };
@@ -144,7 +143,7 @@ template< typename T, std::size_t Size > struct arena_free_list2 {
 
 template< typename T, std::size_t Size > struct arena_free_list3 {
     static_assert(Size <= 64 * 256);
-    
+
     detail::bitset< 256 > index_;
     std::array< detail::bitset<64>, 256 > bitmap_;
 
@@ -169,7 +168,7 @@ template< typename T, std::size_t Size > struct arena_free_list3 {
 
 template< typename T, std::size_t Size > struct arena_free_list4 {
     static_assert(Size <= 64 * 256);
-    
+
     void push(uint16_t value, uint32_t& size) {
         assert(value < Size);
         if (stack_size_ < stack_.size()) {
@@ -234,7 +233,7 @@ template< typename T, std::size_t Size > struct arena_free_list4 {
     detail::bitset< 256 > index_;
     uint32_t stack_size_ = 0;
     uint32_t bitmap_size_ = 0;
-    
+
     // detail::atomic_bitset< 256 > atomic_index_;
     //std::atomic<uint32_t> atomic_bitmap_size_ = 0;
 
@@ -252,7 +251,7 @@ template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class
     // TODO: move all metadata elsewhere
     static constexpr std::size_t Count = (ArenaSize - sizeof(arena_descriptor))/(Size + 2);
     //static constexpr std::size_t Count = round_up((ArenaSize - sizeof(arena_descriptor))/(Size + 2))/2;
-    
+
     //arena_free_list< uint16_t, round_up(Count) > free_list_;
     //arena_free_list2< uint16_t, Count > free_list_;
     //arena_free_list3< uint16_t, round_up(Count) > free_list_;
@@ -272,7 +271,7 @@ public:
 
     uint8_t* begin() const { return begin_; }
     uint8_t* end() const { return (uint8_t*)this + ArenaSize; }
-    
+
     void* allocate() {
         assert(size_class_ == Size);
         uint16_t index = free_list_.pop(free_list_size_);
@@ -281,7 +280,7 @@ public:
         assert(is_ptr_valid(ptr));
         return ptr;
     }
-    
+
     void deallocate(void* ptr) {
     #if defined(THREADS)
         if (tid_ != thread_id())
@@ -323,7 +322,7 @@ template< typename T, std::size_t Size, std::size_t PageSize = 4096 > struct ela
     T* end() { return memory_ + size_; }
 
     bool empty() const { return size_ == 0; }
-    
+
     T& back() {
         assert(!empty());
         return *(memory_ + size_ - 1);
@@ -378,7 +377,7 @@ private:
 template< typename T, std::size_t Size, typename Compare = std::greater<> > struct elastic_heap {
     void push(T value) {
         values_.emplace_back(value);
-        std::push_heap(values_.begin(), values_.end(), Compare{}); 
+        std::push_heap(values_.begin(), values_.end(), Compare{});
     }
 
     bool empty() const {
@@ -458,7 +457,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
 
     void deallocate_page(void* ptr) {
         assert(is_page_valid(ptr));
-    
+
         //mprotect(ptr, PageSize, PROT_NONE);
         madvise(ptr, PageSize, MADV_DONTNEED);
 
@@ -548,7 +547,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         auto& pdesc = get_page_descriptor(page);
         assert(!pdesc.bitmap.full());
         assert(pdesc.state == PageState::Allocated);
-        
+
         void* arena = 0;
         for (size_t i = 0; i < PageArenaCount; ++i) {
             if (!pdesc.bitmap.get(i)) {
@@ -558,7 +557,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
                     assert(page_manager_.get_page(allocated_pages_.top()) == page);
                     allocated_pages_.pop();
                 }
-                
+
                 break;
             }
         }
@@ -599,7 +598,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
         assert(index < PageArenaCount);
         pdesc.bitmap.clear(index);
-        if (pdesc.bitmap.empty()) {        
+        if (pdesc.bitmap.empty()) {
             pdesc.state = PageState::Deallocated;
             page_manager_.deallocate_page(page);
         }
@@ -643,13 +642,13 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > cla
     static_assert((MaxSize & (MaxSize - 1)) == 0);
 
     static constexpr std::size_t PageArenaCount = (PageSize)/(ArenaSize);
-    
+
 protected:
     static constexpr size_t log2(size_t n) { return ((n<2) ? 1 : 1 + log2(n/2)); }
 
     static constexpr size_t size_class(size_t n) { return round_up(std::max(n, 8lu)); }
 
-    template< typename T > static constexpr size_t size_class() { 
+    template< typename T > static constexpr size_t size_class() {
         size_t n = round_up(std::max(sizeof(T), 8lu));
         if (n > 8)
             if (n - n/2 >= sizeof(T)) return n - n/2;
@@ -712,7 +711,7 @@ protected:
     template< size_t SizeClass > arena<ArenaSize, SizeClass, 8>* get_cached_arena() {
         auto offset = size_class_offset(SizeClass);
         assert(classes_cache_[offset] == arena_manager_.get_arena(classes_[offset].top()));
-        return (arena<ArenaSize, SizeClass, 8>*)classes_cache_[offset];        
+        return (arena<ArenaSize, SizeClass, 8>*)classes_cache_[offset];
     }
 
     template< size_t SizeClass > void* reset_cached_arena() {
@@ -758,7 +757,7 @@ protected:
         auto offset = size_class_offset(SizeClass);
         classes_[offset].pop();
     }
-    
+
     template< size_t SizeClass > void push_arena(void* ptr) {
         (void)ptr;
         auto offset = size_class_offset(SizeClass);
@@ -776,23 +775,23 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std:
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<void*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_cache_;
 
 template <typename T > class allocator
-    : public arena_allocator_base< 1<<21, 1<<17, 1ull<<40 > 
+    : public arena_allocator_base< 1<<21, 1<<17, 1ull<<40 >
 {
     template <typename U> friend class allocator;
-    
+
 public:
     using value_type    = T;
 
     allocator() noexcept {
         reset_cached_arena<size_class<T>()>();
     }
-    
+
     value_type* allocate(std::size_t n) {
         assert(n == 1);
         (void)n;
         return reinterpret_cast< value_type* >(allocate_impl<size_class<T>()>());
     }
-    
+
     void deallocate(value_type* ptr, std::size_t n) noexcept {
         assert(n == 1);
         (void)n;
