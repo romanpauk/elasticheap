@@ -5,6 +5,8 @@ include(FetchContent)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+#set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 include(cmake/clang-format.cmake)
 if(WIN32)
     include(cmake/group-sources.cmake)
@@ -20,9 +22,9 @@ sanitizers_init(ELASTICHEAP)
 set(ELASTICHEAP_WARNINGS_GCC
     -Wall
     # -Wpedantic - VLA support
-    -Wextra 
+    -Wextra
     -Wshadow
-    -Wno-unused-variable 
+    -Wno-unused-variable
     -Wno-gnu-zero-variadic-macro-arguments
 )
 
@@ -38,7 +40,7 @@ option(ELASTICHEAP_ENABLE_BENCHMARK "enable benchmarking through googlebenchmark
 find_program(CCACHE_FOUND ccache)
 if(CCACHE_FOUND)
     set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE ccache)
-    set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK ccache) 
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK ccache)
 endif(CCACHE_FOUND)
 
 if(ELASTICHEAP_ENABLE_TESTING)
@@ -56,8 +58,8 @@ endif()
 if(ELASTICHEAP_ENABLE_BENCHMARK)
     FetchContent_Declare(benchmark
         GIT_REPOSITORY https://github.com/google/benchmark.git
-        GIT_TAG main) 
-       
+        GIT_TAG main)
+
     set(BENCHMARK_ENABLE_TESTING off)
     FetchContent_MakeAvailable(benchmark)
 endif()
@@ -84,8 +86,8 @@ if(ELASTICHEAP_ENABLE_BENCHMARK)
         benchmark/page_manager.cpp
     )
 
-    target_link_libraries(elasticheap_benchmark 
-        elasticheap 
+    target_link_libraries(elasticheap_benchmark
+        elasticheap
         benchmark::benchmark
         $<$<PLATFORM_ID:Linux>:atomic>
     )
@@ -110,8 +112,8 @@ if(ELASTICHEAP_ENABLE_TESTING)
     )
 
     add_test(NAME elasticheap_test COMMAND elasticheap_test)
-    target_link_libraries(elasticheap_test 
-        elasticheap	
+    target_link_libraries(elasticheap_test
+        elasticheap
         gtest_main
         $<$<PLATFORM_ID:Linux>:atomic>
     )

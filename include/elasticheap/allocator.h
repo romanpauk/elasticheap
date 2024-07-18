@@ -38,6 +38,8 @@
 #endif
 
 #define __assume(cond) do { if (!(cond)) __builtin_unreachable(); } while (0)
+#define __likely(cond) __builtin_expect((cond), true)
+#define __unlikely(cond) __builtin_expect((cond), false)
 
 //#define STATS
 //#define THREADS
@@ -96,6 +98,17 @@ inline uint64_t thread_id() {
 }
 #endif
 
+//
+// Arenas will be modelled as
+//   arena_descriptor[] - tid, size_class, local free_list_size...
+//   arena_freelist[]
+//      for < 32bytes, this will be stack + bitmap + atomic bitmap
+//          8byte element: (1<<17)/8 = 16384, bitmap size = 2048bytes (x2)
+//              1 page stack, 1 page two bitmaps
+//      for >= 32, this will be stack + bitmap + atomic bitmap (bitmap size = 512bytes)
+//      for >= 64, this will be stack + atomic bitmap
+//
+
 struct arena_descriptor {
 #if defined(THREADS)
     uint64_t tid_;
@@ -109,7 +122,7 @@ template< typename T, std::size_t Size > struct arena_free_list {
     static_assert(Size <= std::numeric_limits<T>::max());
 
     detail::bitset<Size> bitmap_;
-
+    uint32_t index_ = 0;
     void push(T value, uint32_t& size) {
         assert(value < Size);
         assert(size < Size);
@@ -120,7 +133,7 @@ template< typename T, std::size_t Size > struct arena_free_list {
     T pop(uint32_t& size) {
         assert(size);
         --size;
-        return bitmap_.pop_first();
+        return bitmap_.pop_first(index_);
     }
 };
 
@@ -171,7 +184,7 @@ template< typename T, std::size_t Size > struct arena_free_list4 {
 
     void push(uint16_t value, uint32_t& size) {
         assert(value < Size);
-        if (stack_size_ < stack_.size()) {
+        if (__likely(stack_size_ < stack_.size())) {
             stack_[stack_size_++] = value;
         } else {
             push_bitmap(value);
@@ -180,9 +193,8 @@ template< typename T, std::size_t Size > struct arena_free_list4 {
     }
 
     uint16_t pop(uint32_t& size) {
-        if (!stack_size_) {
+        if (__unlikely(!stack_size_)) {
             assert(size);
-            assert(bitmap_size_);
             auto values = pop_bitmap();
         #if 1
             https://lemire.me/blog/2018/02/21/iterating-over-set-bits-quickly/
@@ -203,7 +215,7 @@ template< typename T, std::size_t Size > struct arena_free_list4 {
                 }
             }
         #endif
-        }
+}
 
         --size;
         auto value = stack_[--stack_size_];
@@ -215,8 +227,6 @@ template< typename T, std::size_t Size > struct arena_free_list4 {
         assert(value < Size);
         index_.set(value >> 6);
         bitmap_[value >> 6].set(value & 63);
-        assert(bitmap_size_ < Size);
-        ++bitmap_size_;
     }
 
     std::pair<uint64_t, uint64_t> pop_bitmap() {
@@ -224,15 +234,12 @@ template< typename T, std::size_t Size > struct arena_free_list4 {
         uint64_t lo = bitmap_[hi];
         bitmap_[hi].clear();
         index_.clear(hi);
-        assert(bitmap_size_ >= _mm_popcnt_u64(lo));
-        bitmap_size_ -= _mm_popcnt_u64(lo);
         return {hi << 6, lo};
     }
 
     // metadata
     detail::bitset< 256 > index_;
     uint32_t stack_size_ = 0;
-    uint32_t bitmap_size_ = 0;
 
     // detail::atomic_bitset< 256 > atomic_index_;
     //std::atomic<uint32_t> atomic_bitmap_size_ = 0;
@@ -242,6 +249,44 @@ template< typename T, std::size_t Size > struct arena_free_list4 {
     std::array< detail::bitset< 64 >, 256 > bitmap_; // 2nd page (with atomic portion)
     //std::array< detail::bitset< 64 >, 256 > atomic_bitmap_;
 };
+
+template< typename T, std::size_t Size > struct arena_free_list5 {
+    static_assert(Size <= 64 * 256);
+
+    void push(uint16_t value, uint32_t& size) {
+        assert(value < Size);
+        ++size;
+        if (__likely(stack_size_ < stack_.size())) {
+            stack_[stack_size_++] = value;
+        } else {
+            bitmap_.set(value);
+            //bitmap_index_ = value >> 6;
+        }
+    }
+
+    uint16_t pop(uint32_t& size) {
+        assert(size > 0);
+        --size;
+        if (__unlikely(!stack_size_)) {
+            return bitmap_.pop_first(bitmap_index_);
+        }
+
+        auto value = stack_[--stack_size_];
+        assert(value < Size);
+        return value;
+    }
+
+    // metadata
+    uint32_t stack_size_ = 0;
+    uint32_t bitmap_index_ = 0;
+    // std::atomic<std::size_t > atomic_bitmap_index_;
+
+    // and two pages
+    std::array< uint16_t, 2048 > stack_;    // 1st page
+    detail::bitset< 64 * 256 > bitmap_;     // 2nd page (with atomic portion)
+    //detail::atomic_bitset< 64 * 256 > atomic_bitmap_;
+};
+
 
 template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena
     : public arena_descriptor
@@ -255,7 +300,8 @@ template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class
     //arena_free_list< uint16_t, round_up(Count) > free_list_;
     //arena_free_list2< uint16_t, Count > free_list_;
     //arena_free_list3< uint16_t, round_up(Count) > free_list_;
-    arena_free_list4< uint16_t, Count > free_list_;
+    //arena_free_list4< uint16_t, Count > free_list_;
+    arena_free_list5< uint16_t, Count > free_list_;
 
 public:
     arena() {
@@ -688,7 +734,7 @@ protected:
     template< size_t SizeClass > void* allocate_impl() {
     again:
         auto arena = get_cached_arena<SizeClass>();
-        if (arena->size() < arena->capacity())
+        if (__likely(arena->size() < arena->capacity()))
             return arena->allocate();
 
         assert(arena->size() == arena->capacity());
@@ -700,9 +746,9 @@ protected:
     template< size_t SizeClass > void deallocate_impl(void* ptr) noexcept {
         auto arena = get_arena<SizeClass>(ptr);
         arena->deallocate(ptr);
-        if(arena->size() == 0) {
+        if(__unlikely(arena->size() == 0)) {
             deallocate_arena<SizeClass>(arena);
-        } else if(arena->size() == arena->capacity() - 1) {
+        } else if(__unlikely(arena->size() == arena->capacity() - 1)) {
             push_arena<SizeClass>(arena);
             reset_cached_arena<SizeClass>();
         }

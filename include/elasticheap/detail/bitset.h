@@ -25,18 +25,20 @@ namespace elasticheap::detail {
     };
 
     template<
-        std::size_t Bits, 
+        std::size_t Bits,
         typename T = typename bitset_type<Bits>::type,
         std::size_t Size = (Bits + sizeof(T) * 8 - 1) / (sizeof(T) * 8)
     > struct bitset_base {
         static_assert(Size > 1);
+        static_assert(Size <= std::numeric_limits<uint32_t>::max());
         static_assert((Bits & (Bits - 1)) == 0);
-        
+
         using value_type = T;
+
         static constexpr std::size_t size() { return Bits; }
 
         void clear() {
-            for(std::size_t i = 0; i < Size; ++i)
+            for(uint32_t i = 0; i < Size; ++i)
                 values_[i] = 0;
         }
 
@@ -56,27 +58,39 @@ namespace elasticheap::detail {
         }
 
         bool empty() const {
-            for(std::size_t i = 0; i < Size; ++i)
+            for(uint32_t i = 0; i < Size; ++i)
                 if (values_[i] != 0) return false;
             return true;
         }
 
         bool full() const {
-            for(std::size_t i = 0; i < Size; ++i)
-                if (values_[i] != std::numeric_limits<T>::max()) return false;            
+            for(uint32_t i = 0; i < Size; ++i)
+                if (values_[i] != std::numeric_limits<T>::max()) return false;
             return true;
         }
 
         std::size_t find_first() const {
-            for(std::size_t i = 0; i < Size; ++i) {
+            for(uint32_t i = 0; i < Size; ++i) {
                 if (values_[i])
                     return _tzcnt_u64(values_[i]) + i * sizeof(T) * 8;
             }
             return Size;
         }
 
+        std::size_t find_first(uint32_t& index) const {
+            assert(index < Size);
+            for(int32_t i = 0; i < Size; ++i) {
+                auto j = (i + index) & (Size - 1);
+                if (values_[j]) {
+                    index = j;
+                    return _tzcnt_u64(values_[j]) + j * sizeof(T) * 8;
+                }
+            }
+            return Size;
+        }
+
         std::size_t pop_first() {
-            for(std::size_t i = 0; i < Size; ++i) {
+            for(uint32_t i = 0; i < Size; ++i) {
                 if (values_[i]) {
                     auto count = _tzcnt_u64(values_[i]);
                     values_[i] &= ~(T{1} << count);
@@ -86,21 +100,35 @@ namespace elasticheap::detail {
             return Size;
         }
 
+        std::size_t pop_first(uint32_t& index) {
+            assert(index < Size);
+            for(uint32_t i = 0; i < Size; ++i) {
+                auto j = (i + index) & (Size - 1);
+                if (values_[j]) {
+                    index = j;
+                    auto count = _tzcnt_u64(values_[j]);
+                    values_[j] &= ~(T{1} << count);
+                    return count + j * sizeof(T) * 8;
+                }
+            }
+            return Size;
+        }
+
     private:
         T values_[Size];
     };
-    
+
     template<
-        std::size_t Bits, 
+        std::size_t Bits,
         typename T
     > struct bitset_base<Bits, T, 1> {
         static_assert((Bits & (Bits - 1)) == 0);
 
         using value_type = T;
         static constexpr std::size_t size() { return Bits; }
-        
+
         void clear() { value_ = 0; }
-        
+
         void set(std::size_t index) {
             assert(index < Bits);
             value_ |= T{1} << index;
@@ -118,7 +146,7 @@ namespace elasticheap::detail {
 
         bool empty() const { return value_ == 0; }
         bool full() const { return value_ == std::numeric_limits<T>::max(); }
-        
+
         std::size_t find_first() const {
             return _tzcnt_u64(value_);
         }
