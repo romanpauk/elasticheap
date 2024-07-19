@@ -547,16 +547,14 @@ private:
     alignas(64) detail::atomic_bitset_heap< uint32_t, PageCount > deallocated_pages_;
 };
 
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > struct arena_manager {
-    static_assert((ArenaSize & (ArenaSize - 1)) == 0);
+template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > struct segment_manager {
+    static_assert((SegmentSize & (SegmentSize - 1)) == 0);
 
-    static constexpr std::size_t ArenaCount = MaxSize/ArenaSize;
+    static constexpr std::size_t SegmentCount = MaxSize/SegmentSize;
     static constexpr std::size_t PageCount = MaxSize/PageSize;
-    static constexpr std::size_t PageArenaCount = PageSize/ArenaSize;
+    static constexpr std::size_t PageSegmentCount = PageSize/SegmentSize;
 
-    static constexpr std::size_t PageBitmapFull = (1 << PageArenaCount) - 1;
-
-    static_assert(ArenaCount <= std::numeric_limits<uint32_t>::max());
+    static_assert(SegmentCount <= std::numeric_limits<uint32_t>::max());
 
     enum PageState {
         Deallocated = 0,
@@ -566,7 +564,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
 
     struct page_descriptor {
         uint8_t state;
-        detail::bitset<PageSize/ArenaSize> bitmap;
+        detail::bitset<PageSize/SegmentSize> bitmap;
     };
 
     void* get_allocated_page() {
@@ -588,17 +586,17 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         return page;
     }
 
-    void* allocate_arena() {
+    void* allocate_segment() {
         void* page = get_allocated_page();
         auto& pdesc = get_page_descriptor(page);
         assert(!pdesc.bitmap.full());
         assert(pdesc.state == PageState::Allocated);
 
         void* arena = 0;
-        for (size_t i = 0; i < PageArenaCount; ++i) {
+        for (size_t i = 0; i < PageSegmentCount; ++i) {
             if (!pdesc.bitmap.get(i)) {
                 pdesc.bitmap.set(i);
-                arena = (uint8_t*)page + ArenaSize * i;
+                arena = (uint8_t*)page + SegmentSize * i;
                 if (pdesc.bitmap.full()) {
                     assert(page_manager_.get_page(allocated_pages_.top()) == page);
                     allocated_pages_.pop();
@@ -616,24 +614,24 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         return arena;
     }
 
-    void* get_arena(void* ptr) const {
+    void* get_segment(void* ptr) const {
         assert(is_ptr_in_range(ptr, 1, page_manager_.begin(), page_manager_.end()));
-        return mask<ArenaSize>(ptr);
+        return mask<SegmentSize>(ptr);
     }
 
-    void* get_arena(uint32_t index) const {
-        void* ptr = (uint8_t*)page_manager_.begin() + ArenaSize * index;
-        assert(is_arena_valid(ptr));
+    void* get_segment(uint32_t index) const {
+        void* ptr = (uint8_t*)page_manager_.begin() + SegmentSize * index;
+        assert(is_segment_valid(ptr));
         return ptr;
     }
 
-    uint32_t get_arena_index(void* ptr) const {
-        assert(is_arena_valid(ptr));
-        return ((uint8_t*)ptr - (uint8_t*)page_manager_.begin()) / ArenaSize;
+    uint32_t get_segment_index(void* ptr) const {
+        assert(is_segment_valid(ptr));
+        return ((uint8_t*)ptr - (uint8_t*)page_manager_.begin()) / SegmentSize;
     }
 
-    void deallocate_arena(void* ptr) {
-        assert(is_arena_valid(ptr));
+    void deallocate_segment(void* ptr) {
+        assert(is_segment_valid(ptr));
         void* page = page_manager_.get_page(ptr);
         auto& pdesc = get_page_descriptor(page);
         assert(pdesc.state == PageState::Allocated);
@@ -641,8 +639,8 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
         if (pdesc.bitmap.full())
             allocated_pages_.push(page_manager_.get_page_index(page));
 
-        int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
-        assert(index < PageArenaCount);
+        int index = ((uint8_t*)ptr - (uint8_t*)page)/SegmentSize;
+        assert(index < PageSegmentCount);
         pdesc.bitmap.clear(index);
         if (pdesc.bitmap.empty()) {
             pdesc.state = PageState::Deallocated;
@@ -654,13 +652,13 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > str
     #endif
     }
 
-    template< std::size_t SizeClass > bool get_arena_state(void* ptr) {
-        assert(is_arena_valid(ptr));
+    template< std::size_t SizeClass > bool get_segment_state(void* ptr) {
+        assert(is_segment_valid(ptr));
         void* page = page_manager_.get_page(ptr);
         auto& pdesc = get_page_descriptor(page);
         if (pdesc.state == PageState::Allocated) {
             auto& adesc = *(arena_descriptor*)ptr;
-            int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
+            int index = ((uint8_t*)ptr - (uint8_t*)page)/SegmentSize;
             return pdesc.bitmap.get(index) && adesc.size_class_ == SizeClass;
         }
         return false;
@@ -671,9 +669,9 @@ private:
         return page_descriptors_[page_manager_.get_page_index(page)];
     }
 
-    bool is_arena_valid(void* ptr) const {
-        assert(is_ptr_in_range(ptr, ArenaSize, page_manager_.begin(), page_manager_.end()));
-        assert(is_ptr_aligned(ptr, ArenaSize));
+    bool is_segment_valid(void* ptr) const {
+        assert(is_ptr_in_range(ptr, SegmentSize, page_manager_.begin(), page_manager_.end()));
+        assert(is_ptr_aligned(ptr, SegmentSize));
         return true;
     }
 
@@ -756,7 +754,7 @@ protected:
 
     template< size_t SizeClass > arena<ArenaSize, SizeClass, 8>* get_cached_arena() {
         auto offset = size_class_offset(SizeClass);
-        assert(classes_cache_[offset] == arena_manager_.get_arena(classes_[offset].top()));
+        assert(classes_cache_[offset] == segment_manager_.get_segment(classes_[offset].top()));
         return (arena<ArenaSize, SizeClass, 8>*)classes_cache_[offset];
     }
 
@@ -764,8 +762,8 @@ protected:
         auto offset = size_class_offset(SizeClass);
     again:
         while(!classes_[offset].empty()) {
-            auto* buffer = (arena<ArenaSize, SizeClass, 8>*)arena_manager_.get_arena(classes_[offset].top());
-            if (arena_manager_.template get_arena_state< SizeClass >(buffer) && buffer->size() != buffer->capacity()) {
+            auto* buffer = (arena<ArenaSize, SizeClass, 8>*)segment_manager_.get_segment(classes_[offset].top());
+            if (segment_manager_.template get_segment_state< SizeClass >(buffer) && buffer->size() != buffer->capacity()) {
                 classes_cache_[offset] = buffer;
                 return buffer;
             } else {
@@ -781,21 +779,21 @@ protected:
     }
 
     template< size_t SizeClass > arena<ArenaSize, SizeClass, 8>* get_arena(void* ptr) {
-        return (arena<ArenaSize, SizeClass, 8>*)arena_manager_.get_arena(ptr);
+        return (arena<ArenaSize, SizeClass, 8>*)segment_manager_.get_segment(ptr);
     }
 
     template< size_t SizeClass > arena<ArenaSize, SizeClass, 8>* allocate_arena() {
         auto offset = size_class_offset(SizeClass);
-        void* ptr = arena_manager_.allocate_arena();
+        void* ptr = segment_manager_.allocate_segment();
         auto* buffer = new (ptr) arena<ArenaSize, SizeClass, 8>;
-        classes_[offset].push(arena_manager_.get_arena_index(buffer));
+        classes_[offset].push(segment_manager_.get_segment_index(buffer));
         return buffer;
     }
 
     template< size_t SizeClass > void deallocate_arena(void* ptr) {
         auto offset = size_class_offset(SizeClass);
-        if (classes_[offset].top() != arena_manager_.get_arena_index(ptr)) {
-            arena_manager_.deallocate_arena(ptr);
+        if (classes_[offset].top() != segment_manager_.get_segment_index(ptr)) {
+            segment_manager_.deallocate_segment(ptr);
         }
     }
 
@@ -807,16 +805,16 @@ protected:
     template< size_t SizeClass > void push_arena(void* ptr) {
         (void)ptr;
         auto offset = size_class_offset(SizeClass);
-        classes_[offset].push(arena_manager_.get_arena_index(ptr));
+        classes_[offset].push(segment_manager_.get_segment_index(ptr));
     }
 
-    static arena_manager<PageSize, ArenaSize, MaxSize> arena_manager_;
+    static segment_manager<PageSize, ArenaSize, MaxSize> segment_manager_;
 
     static std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> classes_;
     static std::array<void*, 23> classes_cache_;
 };
 
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> arena_manager<PageSize, ArenaSize, MaxSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::arena_manager_;
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> segment_manager<PageSize, ArenaSize, MaxSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::segment_manager_;
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_;
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<void*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_cache_;
 
