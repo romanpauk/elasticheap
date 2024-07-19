@@ -15,29 +15,31 @@
 
 static void arena_allocator_allocate_uint64_t_arena_only(benchmark::State& state) {
     static uint8_t buffer[1<<20];
-    
+#if 0
+    elasticheap::arena_descriptor desc;
     auto* arena = reinterpret_cast<elasticheap::arena< 1<<17, 8, 8 >*>(buffer);
-    new (arena) elasticheap::arena< 1<<17, 8, 8 >();
+    new (arena) elasticheap::arena< 1<<17, 8, 8 >(desc);
     std::vector< void* > pointers(state.range());
-        
+
     for (auto _ : state) {
         for(size_t j = 0; j < pointers.size(); ++j)
-            pointers[j] = arena->allocate();
+            pointers[j] = arena->allocate(desc);
 
         for(size_t j = 0; j < pointers.size(); ++j)
             *(uint64_t*)pointers[j] = j;
 
         for(size_t j = 0; j < pointers.size(); ++j)
-            arena->deallocate(pointers[j]);
+            arena->deallocate(desc, pointers[j]);
     }
 
     state.SetItemsProcessed(state.iterations() * state.range());
+#endif
 }
 
 static void arena_allocator_allocate_uint64_t(benchmark::State& state) {
     elasticheap::allocator< uint64_t > allocator;
     std::vector< uint64_t* > pointers(state.range());
-        
+
     for (auto _ : state) {
         for(size_t j = 0; j < pointers.size(); ++j)
             pointers[j] = allocator.allocate(1);
@@ -59,22 +61,22 @@ static void arena_allocator_allocate_uint64_t(benchmark::State& state) {
 static void arena_allocator_allocate_sizes(benchmark::State& state) {
     elasticheap::allocator< std::array< uint64_t, 1> > allocator1;
     std::vector< std::array< uint64_t, 1>* > pointers1(state.range());
-    
+
     elasticheap::allocator< std::array< uint64_t, 2> > allocator2;
     std::vector< std::array< uint64_t, 2>* > pointers2(state.range());
-    
+
     elasticheap::allocator< std::array< uint64_t, 3> > allocator3;
     std::vector< std::array< uint64_t, 3>* > pointers3(state.range());
-    
+
     elasticheap::allocator< std::array< uint64_t, 4> > allocator4;
-    std::vector< std::array< uint64_t, 4>* > pointers4(state.range());    
-    
+    std::vector< std::array< uint64_t, 4>* > pointers4(state.range());
+
     elasticheap::allocator< std::array< uint64_t, 5> > allocator5;
-    std::vector< std::array< uint64_t, 5>* > pointers5(state.range());    
-    
+    std::vector< std::array< uint64_t, 5>* > pointers5(state.range());
+
     elasticheap::allocator< std::array< uint64_t, 6> > allocator6;
-    std::vector< std::array< uint64_t, 6>* > pointers6(state.range());    
-    
+    std::vector< std::array< uint64_t, 6>* > pointers6(state.range());
+
     for (auto _ : state) {
         for(int j = 0; j < state.range(); ++j) {
             pointers1[j] = allocator1.allocate(1);
@@ -114,22 +116,22 @@ static void arena_allocator_allocate_sizes(benchmark::State& state) {
 void allocator_allocate_sizes(benchmark::State& state) {
     std::allocator< std::array< uint64_t, 1> > allocator1;
     std::vector< std::array< uint64_t, 1>* > pointers1(state.range());
-    
+
     std::allocator< std::array< uint64_t, 2> > allocator2;
     std::vector< std::array< uint64_t, 2>* > pointers2(state.range());
-    
+
     std::allocator< std::array< uint64_t, 3> > allocator3;
     std::vector< std::array< uint64_t, 3>* > pointers3(state.range());
-    
+
     std::allocator< std::array< uint64_t, 4> > allocator4;
-    std::vector< std::array< uint64_t, 4>* > pointers4(state.range());    
-    
+    std::vector< std::array< uint64_t, 4>* > pointers4(state.range());
+
     std::allocator< std::array< uint64_t, 5> > allocator5;
-    std::vector< std::array< uint64_t, 5>* > pointers5(state.range());    
-    
+    std::vector< std::array< uint64_t, 5>* > pointers5(state.range());
+
     std::allocator< std::array< uint64_t, 6> > allocator6;
-    std::vector< std::array< uint64_t, 6>* > pointers6(state.range());    
-    
+    std::vector< std::array< uint64_t, 6>* > pointers6(state.range());
+
     for (auto _ : state) {
         for(int j = 0; j < state.range(); ++j) {
             pointers1[j] = allocator1.allocate(1);
