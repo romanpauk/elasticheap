@@ -77,6 +77,10 @@ template< typename T, std::size_t Capacity > struct atomic_bitset_heap {
         return false;
     }
 
+    bool get(T value) const {
+        return bitmap_.get(value);
+    }
+
 private:
     std::tuple< uint32_t, uint32_t > unpack(uint64_t range) {
         return { range >> 32, range };

@@ -532,6 +532,10 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
         return ((uint8_t*)ptr - (uint8_t*)memory_) / PageSize;
     }
 
+    bool is_page_deallocated(void* page) {
+        return deallocated_pages_.get(get_page_index(page));
+    }
+
 private:
     bool is_page_valid(void* ptr) const {
         assert(is_ptr_in_range(ptr, PageSize, begin(), end()));
@@ -545,12 +549,6 @@ private:
     alignas(64) detail::atomic_bitset_heap< uint32_t, PageCount > deallocated_pages_;
 };
 
-enum PageState {
-    Deallocated = 0,
-    Allocated = 1,
-    Full = 2,
-};
-
 template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > struct segment_manager {
     static_assert((SegmentSize & (SegmentSize - 1)) == 0);
 
@@ -561,15 +559,13 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
     static_assert(SegmentCount <= std::numeric_limits<uint32_t>::max());
 
     struct page_descriptor {
-        uint8_t state;
         detail::bitset<PageSize/SegmentSize> bitmap;
     };
 
     void* get_allocated_page() {
         while(!allocated_pages_.empty()) {
             void* page = page_manager_.get_page(allocated_pages_.top());
-            auto& pdesc= get_page_descriptor(page);
-            if (pdesc.state == PageState::Deallocated) {
+            if (page_manager_.is_page_deallocated(page)) {
                 allocated_pages_.pop();
                 continue;
             }
@@ -579,7 +575,6 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         void* page = page_manager_.allocate_page();
         auto& pdesc = get_page_descriptor(page);
         pdesc.bitmap.clear();
-        pdesc.state = PageState::Allocated;
         allocated_pages_.push(page_manager_.get_page_index(page));
         return page;
     }
@@ -588,7 +583,6 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         void* page = get_allocated_page();
         auto& pdesc = get_page_descriptor(page);
         assert(!pdesc.bitmap.full());
-        assert(pdesc.state == PageState::Allocated);
 
         void* arena = 0;
         for (size_t i = 0; i < PageSegmentCount; ++i) {
@@ -604,7 +598,7 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
             }
         }
 
-        assert(is_arena_valid(arena));
+        assert(is_segment_valid(arena));
 
     #if defined(STATS)
         ++stats.arenas_allocated;
@@ -632,7 +626,6 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         assert(is_segment_valid(ptr));
         void* page = page_manager_.get_page(ptr);
         auto& pdesc = get_page_descriptor(page);
-        assert(pdesc.state == PageState::Allocated);
 
         if (pdesc.bitmap.full())
             allocated_pages_.push(page_manager_.get_page_index(page));
@@ -641,7 +634,6 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         assert(index < PageSegmentCount);
         pdesc.bitmap.clear(index);
         if (pdesc.bitmap.empty()) {
-            pdesc.state = PageState::Deallocated;
             page_manager_.deallocate_page(page);
         }
 
@@ -658,13 +650,17 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         return page_descriptors_[page_manager_.get_page_index(page)];
     }
 
-private:
+    bool is_page_deallocated(void* page) {
+        return page_manager_.is_page_deallocated(page);
+    }
+
     bool is_segment_valid(void* ptr) const {
         assert(is_ptr_in_range(ptr, SegmentSize, page_manager_.begin(), page_manager_.end()));
         assert(is_ptr_aligned(ptr, SegmentSize));
         return true;
     }
 
+private:
     page_manager< PageSize, MaxSize > page_manager_;
     detail::bitset_heap< uint32_t, PageCount > allocated_pages_;
     page_descriptor page_descriptors_[PageCount];
@@ -799,10 +795,10 @@ protected:
     }
 
     template< std::size_t SizeClass > bool validate_arena_state(void* ptr) {
-        assert(is_segment_valid(ptr));
+        assert(segment_manager_.is_segment_valid(ptr));
         void* page = segment_manager_.get_page(ptr);
-        auto& pdesc = segment_manager_.get_page_descriptor(page);
-        if (pdesc.state == PageState::Allocated) {
+        if (!segment_manager_.is_page_deallocated(page)) {
+            auto& pdesc = segment_manager_.get_page_descriptor(page);
             auto& adesc = *(arena_descriptor*)ptr;
             int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
             return pdesc.bitmap.get(index) && adesc.size_class_ == SizeClass;
