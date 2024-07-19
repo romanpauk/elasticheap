@@ -10,7 +10,6 @@
 #include <elasticheap/detail/atomic_bitset.h>
 
 #include <algorithm>
-#include <array>
 #include <cassert>
 #include <tuple>
 
@@ -32,14 +31,14 @@ template< typename T, std::size_t Capacity > struct atomic_bitset_heap {
         assert(value < Capacity);
         assert(!bitmap_.get(value));
         bitmap_.set(value);
-        
+
         while(true) {
             auto [max, min] = unpack(range);
             if (max >= value && min <= value) {
                 std::atomic_thread_fence(std::memory_order_release);
                 return;
             }
-            
+
             if(range_.compare_exchange_strong(range, pack(std::max<T>(max, value), std::min<T>(min, value)), std::memory_order_release)) {
                 return;
             }
@@ -62,7 +61,7 @@ template< typename T, std::size_t Capacity > struct atomic_bitset_heap {
                         value = min;
                         return true;
                     }
-                    
+
                     goto again;
                 }
             }
