@@ -349,6 +349,7 @@ private:
     }
 
     free_list_type free_list_;
+    static_assert(sizeof(free_list_type) + sizeof(arena_descriptor_base) <= 32768);
 };
 
 template< typename T, std::size_t Size, std::size_t PageSize = 4096 > struct elastic_array {
