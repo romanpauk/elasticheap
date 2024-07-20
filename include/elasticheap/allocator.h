@@ -44,22 +44,17 @@
 #define MAGIC
 
 namespace elasticheap {
+#if defined(STATS)
+    struct allocator_stats {
+        uint64_t pages_allocated;
+    };
 
-struct allocator_stats {
-    std::size_t pages_allocated = 0;
-    std::size_t pages_deallocated_heap_size = 0;
-    std::size_t pages_deallocated_heap_commited = 0;
-    std::size_t arenas_allocated = 0;
-    std::size_t arenas_deallocated_heap_size = 0;
-};
+    static allocator_stats stats;
 
-static allocator_stats stats;
-
-inline void print_stats() {
-    fprintf(stderr, "stats: pages_allocated %lu, pages_deallocated_heap_size %lu, pages_deallocated_heap_commited %lu, arenas_allocated %lu, arenas_deallocated_heap_size %lu\n",
-        stats.pages_allocated, stats.pages_deallocated_heap_size, stats.pages_deallocated_heap_commited, stats.arenas_allocated, stats.arenas_deallocated_heap_size
-    );
-}
+    static void print_stats() {
+        fprintf(stderr, "pages_allocated: %lu\n", stats.pages_allocated);
+    }
+#endif
 
 inline bool is_ptr_aligned(void* ptr, std::size_t alignment) {
     return ((uintptr_t)ptr & (alignment - 1)) == 0;
@@ -498,8 +493,6 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
         mprotect(ptr, PageSize, PROT_READ | PROT_WRITE);
     #if defined(STATS)
         ++stats.pages_allocated;
-        stats.pages_deallocated_heap_size = deallocated_pages_.size();
-        stats.pages_deallocated_heap_commited = deallocated_pages_.size_commited();
     #endif
         return ptr;
     }
@@ -514,8 +507,6 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
         deallocated_pages_.push(get_page_index(ptr));
     #if defined(STATS)
         --stats.pages_allocated;
-        stats.pages_deallocated_heap_size = deallocated_pages_.size();
-        stats.pages_deallocated_heap_commited = deallocated_pages_.size_commited();
     #endif
     }
 
@@ -605,10 +596,6 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         }
 
         assert(is_segment_valid(segment));
-
-    #if defined(STATS)
-        ++stats.arenas_allocated;
-    #endif
         return segment;
     }
 
@@ -642,10 +629,6 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         if (pdesc.bitmap.empty()) {
             page_manager_.deallocate_page(page);
         }
-
-    #if defined(STATS)
-        --stats.arenas_allocated;
-    #endif
     }
 
     void* get_page(void* ptr) {
