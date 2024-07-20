@@ -43,6 +43,7 @@
 
 //#define STATS
 //#define THREADS
+#define MAGIC
 
 namespace elasticheap {
 
@@ -107,16 +108,6 @@ inline uint64_t thread_id() {
 //
 // Separate segment managers for arena metadata
 //
-
-struct arena_descriptor {
-#if defined(THREADS)
-    uint64_t tid_;
-#endif
-    uint8_t* begin_;
-    uint32_t size_class_;
-    uint32_t free_list_size_;
-    void *free_list_;
-};
 
 template< typename T, std::size_t Size > struct arena_free_list {
     static_assert(Size <= std::numeric_limits<T>::max());
@@ -287,64 +278,77 @@ template< typename T, std::size_t Size > struct arena_free_list5 {
     //detail::atomic_bitset< 64 * 256 > atomic_bitmap_;
 };
 
-template< std::size_t ArenaSize, std::size_t Size, std::size_t Alignment > class arena {
-    static_assert((ArenaSize & (ArenaSize - 1)) == 0);
+struct arena_descriptor_base {
+#if defined(THREADS)
+    uint64_t tid_;
+#endif
+    uint8_t* begin_;
+    uint32_t size_class_;
+    uint32_t free_list_size_;
+#if defined(MAGIC)
+    uint32_t magic_ = 0xDEADBEEF;
+#endif
+};
 
-    // TODO: move all metadata elsewhere
-    static constexpr std::size_t Count = (ArenaSize - sizeof(arena_descriptor))/(Size);
-    //static constexpr std::size_t Count = round_up((ArenaSize - sizeof(arena_descriptor))/(Size + 2))/2;
+template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 8 > struct arena_descriptor: arena_descriptor_base {
+    static constexpr std::size_t Capacity = ArenaSize/SizeClass;
 
-    //using free_list_type = arena_free_list< uint16_t, round_up(Count) >;
-    using free_list_type = arena_free_list2< uint16_t, Count >;
-    //using free_list_type = arena_free_list3< uint16_t, round_up(Count) >;
-    //using free_list_type = arena_free_list4< uint16_t, Count >;
-    //using free_list_type = arena_free_list5< uint16_t, Count >;
+    arena_descriptor(void* buffer) {
+        begin_ = (uint8_t*)buffer;
+        size_class_ = SizeClass;
+        free_list_size_ = 0;
+        for(std::size_t i = Capacity - 1; i > 0; --i)
+            free_list_.push(i, free_list_size_);
 
-public:
-    static void init(arena_descriptor& desc, void* ptr) {
-    #if defined(THREADS)
-        tid_ = thread_id();
-    #endif
-        desc.begin_ = (uint8_t*)ptr;
-        desc.size_class_ = Size;
-        desc.free_list_size_ = 0;
-        for(std::size_t i = Count - 1; i > 0; --i)
-            static_cast<free_list_type*>(desc.free_list_)->push(i, desc.free_list_size_);
     }
 
-    static uint8_t* begin(arena_descriptor& desc) { return desc.begin_; }
-    static uint8_t* end(arena_descriptor& desc) { return (uint8_t*)desc.begin_ + ArenaSize; }
+    //using free_list_type = arena_free_list< uint16_t, Capacity >;
+    //using free_list_type = arena_free_list2< uint16_t, Capacity >;
+    //using free_list_type = arena_free_list3< uint16_t, Capacity >;
+    //using free_list_type = arena_free_list4< uint16_t, Capacity >;
+    using free_list_type = arena_free_list5< uint16_t, Capacity >;
 
-    static void* allocate(arena_descriptor& desc) {
-        assert(desc.size_class_ == Size);
-        uint16_t index = static_cast<free_list_type*>(desc.free_list_)->pop(desc.free_list_size_);
-        assert(index < Count);
-        uint8_t* ptr = desc.begin_ + index * Size;
-        assert(is_ptr_valid(desc, ptr));
+    void* allocate() {
+    #if defined(MAGIC)
+        assert(magic_ == 0xDEADBEEF);
+    #endif
+        assert(size_class_ == SizeClass);
+        uint16_t index = free_list_.pop(free_list_size_);
+        assert(index < Capacity);
+        uint8_t* ptr = begin_ + index * SizeClass;
+        assert(is_ptr_valid(ptr));
         return ptr;
     }
 
-    static void deallocate(arena_descriptor& desc, void* ptr) {
+    void deallocate(void* ptr) {
+    #if defined(MAGIC)
+        assert(magic_ == 0xDEADBEEF);
+    #endif
     #if defined(THREADS)
         if (tid_ != thread_id())
             std::abort();
     #endif
-        assert(desc.size_class_ == Size);
-        assert(is_ptr_valid(desc, ptr));
-        size_t index = ((uint8_t*)ptr - desc.begin_) / Size;
-        static_cast<free_list_type*>(desc.free_list_)->push(index, desc.free_list_size_);
+        assert(size_class_ == SizeClass);
+        assert(is_ptr_valid(ptr));
+        size_t index = ((uint8_t*)ptr - begin_) / SizeClass;
+        free_list_.push(index, free_list_size_);
     }
 
-    static constexpr std::size_t capacity() { return Count; }
+    static constexpr std::size_t capacity() { return Capacity; }
 
-    static std::size_t size(arena_descriptor& desc) { return Count - desc.free_list_size_; }
+    std::size_t size() { return Capacity - free_list_size_; }
+
+    uint8_t* begin() { return begin_; }
+    uint8_t* end() { return begin_ + ArenaSize; }
 
 private:
-    static bool is_ptr_valid(arena_descriptor& desc, void* ptr) {
-        assert(is_ptr_in_range(ptr, Size, begin(desc), end(desc)));
+    bool is_ptr_valid(void* ptr) {
+        assert(is_ptr_in_range(ptr, SizeClass, begin(), end()));
         assert(is_ptr_aligned(ptr, Alignment));
         return true;
     }
+
+    free_list_type free_list_;
 };
 
 template< typename T, std::size_t Size, std::size_t PageSize = 4096 > struct elastic_array {
@@ -716,116 +720,112 @@ protected:
 
     template< size_t SizeClass > void* allocate_impl() {
     again:
-        auto buffer = get_cached_arena<SizeClass>();
-        auto& desc = arena_descriptors_[segment_manager_.get_segment_index(buffer)];
-        if (__likely((arena<ArenaSize, SizeClass, 8>::size(desc) < arena<ArenaSize, SizeClass, 8>::capacity())))
-            return arena<ArenaSize, SizeClass, 8>::allocate(desc);
+        auto* desc = get_cached_descriptor<SizeClass>();
+        if (__likely(desc->size() < desc->capacity()))
+            return desc->allocate();
 
-        assert((arena<ArenaSize, SizeClass, 8>::size(desc) == arena<ArenaSize, SizeClass, 8>::capacity()));
-        pop_arena<SizeClass>();
-        reset_cached_arena<SizeClass>();
+        assert(desc->size() == desc->capacity());
+        pop_descriptor<SizeClass>();
+        reset_cached_descriptor<SizeClass>();
         goto again;
     }
 
     template< size_t SizeClass > void deallocate_impl(void* ptr) noexcept {
-        auto buffer = get_arena(ptr);
-        auto& desc = arena_descriptors_[segment_manager_.get_segment_index(buffer)];
-        arena<ArenaSize, SizeClass, 8>::deallocate(desc, ptr);
-        if(__unlikely((arena<ArenaSize, SizeClass, 8>::size(desc) == 0))) {
-            deallocate_arena<SizeClass>(buffer);
-        } else if(__unlikely((arena<ArenaSize, SizeClass, 8>::size(desc) == arena<ArenaSize, SizeClass, 8>::capacity() - 1))) {
-            push_arena<SizeClass>(buffer);
-            reset_cached_arena<SizeClass>();
+        auto* desc = get_descriptor<SizeClass>(ptr);
+        desc->deallocate(ptr);
+        if(__unlikely(desc->size() == 0)) {
+            deallocate_descriptor<SizeClass>(desc);
+        } else if(__unlikely(desc->size() == desc->capacity() - 1)) {
+            push_descriptor<SizeClass>(desc);
+            reset_cached_descriptor<SizeClass>();
         }
     }
 
-    template< size_t SizeClass > void* get_cached_arena() {
-        auto offset = size_class_offset(SizeClass);
-        assert(classes_cache_[offset] == segment_manager_.get_segment(classes_[offset].top()));
-        return classes_cache_[offset];
+    template< size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* get_cached_descriptor() {
+        auto size = size_class_offset(SizeClass);
+        assert(size_class_cache_[size] == descriptor_manager_.get_segment(size_classes_[size].top()));
+        return (arena_descriptor< ArenaSize, SizeClass >*)size_class_cache_[size];
     }
 
-    template< size_t SizeClass > void* reset_cached_arena() {
-        auto offset = size_class_offset(SizeClass);
+    template< size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* reset_cached_descriptor() {
+        auto size = size_class_offset(SizeClass);
     again:
-        while(!classes_[offset].empty()) {
-            auto* buffer = segment_manager_.get_segment(classes_[offset].top());
-            auto& desc = arena_descriptors_[segment_manager_.get_segment_index(buffer)];
-            if ((validate_arena_state< SizeClass >(buffer) && arena<ArenaSize, SizeClass, 8>::size(desc) != arena<ArenaSize, SizeClass, 8>::capacity())) {
-                classes_cache_[offset] = buffer;
-                return buffer;
+        while(!size_classes_[size].empty()) {
+            auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_segment(size_classes_[size].top());
+            if ((validate_descriptor_state< SizeClass >(desc) && desc->size() != desc->capacity())) {
+                size_class_cache_[size] = desc;
+                return desc;
             } else {
-                pop_arena<SizeClass>();
-                if(classes_[offset].size())
+                pop_descriptor<SizeClass>();
+                if(size_classes_[size].size())
                     goto again;
             }
         }
 
-        void* buffer = allocate_arena<SizeClass>();
-        classes_cache_[offset] = buffer;
-        return buffer;
+        auto* desc = allocate_descriptor<SizeClass>();
+        size_class_cache_[size] = desc;
+        return desc;
     }
 
-    void* get_arena(void* ptr) {
-        return segment_manager_.get_segment(ptr);
+    template< typename std::size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* get_descriptor(void* ptr) {
+        return (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_segment(descriptors_[segment_manager_.get_segment_index(segment_manager_.get_segment(ptr))]);
     }
 
-    template< size_t SizeClass > void* allocate_arena() {
-        auto offset = size_class_offset(SizeClass);
-        void* ptr = segment_manager_.allocate_segment();
-        auto& desc = arena_descriptors_[segment_manager_.get_segment_index(ptr)];
-        desc.free_list_ = freelist_manager_.allocate_segment();
-        arena<ArenaSize, SizeClass, 8>::init(desc, ptr);
-        classes_[offset].push(segment_manager_.get_segment_index(ptr));
-        return ptr;
+    template< size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* allocate_descriptor() {
+        auto size = size_class_offset(SizeClass);
+        void* buffer = segment_manager_.allocate_segment();
+        auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.allocate_segment();
+        descriptors_[segment_manager_.get_segment_index(buffer)] = descriptor_manager_.get_segment_index(desc);
+        new(desc) arena_descriptor< ArenaSize, SizeClass >(buffer);
+        size_classes_[size].push(descriptor_manager_.get_segment_index(desc));
+        return desc;
     }
 
-    template< size_t SizeClass > void deallocate_arena(void* ptr) {
-        auto offset = size_class_offset(SizeClass);
-        if (classes_[offset].top() != segment_manager_.get_segment_index(ptr)) {
-            auto& desc = arena_descriptors_[segment_manager_.get_segment_index(ptr)];
-            freelist_manager_.deallocate_segment(desc.free_list_);
+    template< size_t SizeClass > void deallocate_descriptor(void* ptr) {
+        auto size = size_class_offset(SizeClass);
+        if (size_classes_[size].top() != descriptors_[segment_manager_.get_segment_index(ptr)]) {
+            auto* desc = descriptor_manager_.get_segment(descriptors_[segment_manager_.get_segment_index(ptr)]);
+            descriptor_manager_.deallocate_segment(desc);
             segment_manager_.deallocate_segment(ptr);
         }
     }
 
-    template< size_t SizeClass > void pop_arena() {
-        auto offset = size_class_offset(SizeClass);
-        classes_[offset].pop();
+    template< size_t SizeClass > void pop_descriptor() {
+        auto size = size_class_offset(SizeClass);
+        size_classes_[size].pop();
     }
 
-    template< size_t SizeClass > void push_arena(void* ptr) {
-        (void)ptr;
-        auto offset = size_class_offset(SizeClass);
-        classes_[offset].push(segment_manager_.get_segment_index(ptr));
+    template< size_t SizeClass > void push_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
+        (void)desc;
+        auto size = size_class_offset(SizeClass);
+        size_classes_[size].push(descriptor_manager_.get_segment_index(desc));
     }
 
-    template< std::size_t SizeClass > bool validate_arena_state(void* ptr) {
-        assert(segment_manager_.is_segment_valid(ptr));
-        void* page = segment_manager_.get_page(ptr);
-        if (!segment_manager_.is_page_deallocated(page)) {
-            auto& pdesc = segment_manager_.get_page_descriptor(page);
-            auto& adesc = *(arena_descriptor*)ptr;
-            int index = ((uint8_t*)ptr - (uint8_t*)page)/ArenaSize;
-            return pdesc.bitmap.get(index) && adesc.size_class_ == SizeClass;
+    template< std::size_t SizeClass > bool validate_descriptor_state(arena_descriptor<ArenaSize, SizeClass>* desc) {
+        assert(descriptor_manager_.is_segment_valid(desc));
+        void* page = descriptor_manager_.get_page(desc);
+        if (!descriptor_manager_.is_page_deallocated(page)) {
+            auto& pdesc = descriptor_manager_.get_page_descriptor(page);
+            int index = ((uint8_t*)desc - (uint8_t*)page)/32768;
+            return pdesc.bitmap.get(index) && desc->size_class_ == SizeClass;
         }
         return false;
     }
 
     static segment_manager<PageSize, ArenaSize, MaxSize> segment_manager_;
-    static segment_manager<PageSize, 32768, MaxSize/ArenaSize * 32768> freelist_manager_;
+    static segment_manager<PageSize, 32768, MaxSize/ArenaSize * 32768> descriptor_manager_;
 
-    static std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> classes_;
-    static std::array<void*, 23> classes_cache_;
+    static std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> size_classes_;
+    static std::array<void*, 23> size_class_cache_;
 
-    static std::array<arena_descriptor, MaxSize/ArenaSize> arena_descriptors_;
+    static std::array<uint32_t, MaxSize/ArenaSize> descriptors_;
 };
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> segment_manager<PageSize, ArenaSize, MaxSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::segment_manager_;
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> segment_manager<PageSize, 32768, MaxSize/ArenaSize * 32768> arena_allocator_base<PageSize, ArenaSize, MaxSize>::freelist_manager_;
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_;
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<void*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::classes_cache_;
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<arena_descriptor, MaxSize/ArenaSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::arena_descriptors_;
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> segment_manager<PageSize, 32768, MaxSize/ArenaSize * 32768> arena_allocator_base<PageSize, ArenaSize, MaxSize>::descriptor_manager_;
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_classes_;
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<void*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_class_cache_;
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<uint32_t, MaxSize/ArenaSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::descriptors_;
 
 template <typename T > class allocator
     : public arena_allocator_base< 1<<21, 1<<17, 1ull<<40 >
@@ -836,7 +836,7 @@ public:
     using value_type    = T;
 
     allocator() noexcept {
-        reset_cached_arena<size_class<T>()>();
+        reset_cached_descriptor<size_class<T>()>();
     }
 
     value_type* allocate(std::size_t n) {
