@@ -309,7 +309,7 @@ public:
         begin_ = (uint8_t*)this + sizeof(*this);
         size_class_ = Size;
         free_list_size_ = 0;
-        for(std::size_t i = Count - 1; i > 0; --i)
+        for(int i = Count - 1; i >= 0; --i)
             free_list_.push(i, free_list_size_);
     }
 
