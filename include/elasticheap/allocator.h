@@ -107,6 +107,7 @@ template< typename T, std::size_t Size > struct arena_free_list {
 
     detail::bitset<Size> bitmap_;
     uint32_t index_ = 0;
+
     void push(T value, uint32_t& size) {
         assert(value < Size);
         assert(size < Size);
@@ -347,17 +348,17 @@ private:
     static_assert(sizeof(free_list_type) + sizeof(arena_descriptor_base) <= DescriptorSize);
 };
 
-template< typename T, std::size_t Size, std::size_t PageSize = 4096 > struct elastic_array {
+template< typename T, std::size_t Size, std::size_t PageSize = 4096 > struct elastic_vector {
     using size_type = uint32_t;
     static_assert(sizeof(T) * Size < std::numeric_limits<size_type>::max());
 
-    elastic_array() {
+    elastic_vector() {
         memory_ = (T*)mmap(0, sizeof(T) * Size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (memory_ == MAP_FAILED)
             std::abort();
     }
 
-    ~elastic_array() {
+    ~elastic_vector() {
         munmap(memory_, sizeof(T) * Size);
     }
 
@@ -455,7 +456,7 @@ template< typename T, std::size_t Size, typename Compare = std::greater<> > stru
     auto size_commited() const { return values_.size_commited(); }
 
 private:
-    elastic_array<T, Size> values_;
+    elastic_vector<T, Size> values_;
 };
 
 template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
@@ -756,6 +757,7 @@ protected:
 
     template< typename std::size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* get_descriptor(void* ptr) {
         auto si = segment_manager_.get_segment_index(ptr);
+        //return (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_segment(si);
         return (arena_descriptor<ArenaSize, SizeClass>*)descriptors_[si];
     }
 
@@ -799,6 +801,9 @@ protected:
         return false;
     }
 
+    // TODO: instead of descriptor manager, place descriptors in mmapped area before the arenas
+    // That way, accessing descriptor will be cheap and no tracking will be required (except some
+    // elastic_array like thingy to release the pages).
     static segment_manager<PageSize, ArenaSize, MaxSize> segment_manager_;
     static segment_manager<PageSize, DescriptorSize, MaxSize/ArenaSize * DescriptorSize> descriptor_manager_;
 
