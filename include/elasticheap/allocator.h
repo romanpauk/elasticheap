@@ -284,12 +284,15 @@ struct arena_descriptor_base {
     uint32_t free_list_size_;
 };
 
-static constexpr std::size_t DescriptorSize = 32768*2;
+static constexpr std::size_t DescriptorSize = 1<<16;
 
 template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 8 > struct arena_descriptor: arena_descriptor_base {
     static constexpr std::size_t Capacity = ArenaSize/SizeClass;
 
     arena_descriptor(void* buffer) {
+    #if defined(THREADS)
+        tid_ = thread_id();
+    #endif
         begin_ = (uint8_t*)buffer;
         size_class_ = SizeClass;
         free_list_size_ = 0;
@@ -461,7 +464,7 @@ private:
 
 template< std::size_t PageSize, std::size_t DescriptorSize, std::size_t MaxSize > struct descriptor_manager {
     static constexpr std::size_t MmapSize = (MaxSize + PageSize - 1) & ~(PageSize - 1);
-    static_assert(PageSize / DescriptorSize <= 256);
+    static_assert(PageSize / DescriptorSize < 256);
 
     descriptor_manager() {
         mmap_ = (uint8_t*)mmap(0, MmapSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -475,27 +478,49 @@ template< std::size_t PageSize, std::size_t DescriptorSize, std::size_t MaxSize 
         munmap(mmap_, MmapSize);
     }
 
-    void* get_descriptor(std::size_t i) {
+    void* allocate_segment(std::size_t i) {
+        assert(i < MaxSize / DescriptorSize);
         if (refs_[ref(i)]++ == 0) {
-            mprotect(mask<PageSize>(&memory_[(i * DescriptorSize) / PageSize]), PageSize, PROT_READ | PROT_WRITE);
+            auto ptr = &memory_[i*DescriptorSize];
+            if (mprotect(mask<PageSize>(&memory_[i * DescriptorSize]), PageSize, PROT_READ | PROT_WRITE) != 0)
+                std::abort();
         }
 
         return &memory_[i * DescriptorSize];
     }
 
-    void release_descriptor(std::size_t i) {
+    void deallocate_segment(void* ptr) {
+        deallocate_segment(get_segment_index(ptr));
+    }
+
+    void deallocate_segment(std::size_t i) {
+        assert(i < MaxSize / DescriptorSize);
+        assert(refs_[ref(i)] > 0);
         if (--refs_[ref(i)] == 0) {
-            madvise(mask<PageSize>(&memory_[(i * DescriptorSize) / PageSize]), PageSize, MADV_DONTNEED);
+            auto ptr = mask<PageSize>(&memory_[i * DescriptorSize]);
+            if (madvise(mask<PageSize>(&memory_[i * DescriptorSize]), PageSize, MADV_DONTNEED) != 0)
+                std::abort();
         }
     }
 
     std::size_t ref(std::size_t i) {
-        assert(i < values_.size());
+        assert(i < MaxSize/DescriptorSize);
         return DescriptorSize * i / PageSize;
     }
 
+    uint32_t get_segment_index(void* desc) {
+        auto index = ((uint8_t*)desc - memory_)/DescriptorSize;
+        assert(index < MaxSize/DescriptorSize);
+        return index;
+    }
+
+    void* get_descriptor(uint32_t index) {
+        assert(index < MaxSize / DescriptorSize);
+        return memory_ + index * DescriptorSize;
+    }
+
 private:
-    std::array<uint8_t, MaxSize / DescriptorSize / PageSize> refs_;
+    std::array<uint8_t, MaxSize / DescriptorSize / (PageSize / DescriptorSize) > refs_ = {0};
     void* mmap_ = 0;
     uint8_t* memory_ = 0;
 };
@@ -771,7 +796,7 @@ protected:
 
     template< size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* get_cached_descriptor() {
         auto size = size_class_offset(SizeClass);
-        assert(size_class_cache_[size] == descriptor_manager_.get_segment(size_classes_[size].top()));
+        assert(size_class_cache_[size] == descriptor_manager_.get_descriptor(size_classes_[size].top()));
         return (arena_descriptor< ArenaSize, SizeClass >*)size_class_cache_[size];
     }
 
@@ -779,7 +804,7 @@ protected:
         auto size = size_class_offset(SizeClass);
     again:
         while(!size_classes_[size].empty()) {
-            auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_segment(size_classes_[size].top());
+            auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_descriptor(size_classes_[size].top());
             if ((validate_descriptor_state< SizeClass >(desc) && desc->size() != desc->capacity())) {
                 size_class_cache_[size] = desc;
                 return desc;
@@ -799,14 +824,14 @@ protected:
     template< typename std::size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* get_descriptor(void* ptr) {
         auto si = segment_manager_.get_segment_index(ptr);
         //return (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_segment(si);
-        return (arena_descriptor<ArenaSize, SizeClass>*)descriptors_[si];
+        return (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_descriptor(si);
     }
 
     template< size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* allocate_descriptor() {
         auto size = size_class_offset(SizeClass);
         void* buffer = segment_manager_.allocate_segment();
-        auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.allocate_segment();
-        descriptors_[segment_manager_.get_segment_index(buffer)] = desc;
+        auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.allocate_segment(segment_manager_.get_segment_index(buffer));
+        //descriptors_[segment_manager_.get_segment_index(buffer)] = desc;
         new(desc) arena_descriptor< ArenaSize, SizeClass >(buffer);
         size_classes_[size].push(descriptor_manager_.get_segment_index(desc));
         return desc;
@@ -832,33 +857,32 @@ protected:
     }
 
     template< std::size_t SizeClass > bool validate_descriptor_state(arena_descriptor<ArenaSize, SizeClass>* desc) {
-        assert(descriptor_manager_.is_segment_valid(desc));
-        void* page = descriptor_manager_.get_page(desc);
-        if (!descriptor_manager_.is_page_deallocated(page)) {
-            auto& pdesc = descriptor_manager_.get_page_descriptor(page);
-            int index = ((uint8_t*)desc - (uint8_t*)page)/DescriptorSize;
-            return pdesc.bitmap.get(index) && desc->size_class_ == SizeClass;
+        auto index = descriptor_manager_.get_segment_index(desc);
+        auto* segment = segment_manager_.get_segment(index);
+        void* page = segment_manager_.get_page(segment);
+        if (!segment_manager_.is_page_deallocated(page)) {
+            auto& pdesc = segment_manager_.get_page_descriptor(page);
+            int pindex = ((uint8_t*)segment - (uint8_t*)page)/ArenaSize;
+            // TODO: for MT, there needs ot be a thread ownership check
+            return pdesc.bitmap.get(pindex) && desc->size_class_ == SizeClass;
         }
         return false;
     }
 
-    // TODO: instead of descriptor manager, place descriptors in mmapped area before the arenas
-    // That way, accessing descriptor will be cheap and no tracking will be required (except some
-    // elastic_array like thingy to release the pages).
+    // TOOD: use some more separated global/local state
     static segment_manager<PageSize, ArenaSize, MaxSize> segment_manager_;
-    static segment_manager<PageSize, DescriptorSize, MaxSize/ArenaSize * DescriptorSize> descriptor_manager_;
-
+    static descriptor_manager<PageSize, DescriptorSize, MaxSize/ArenaSize*DescriptorSize> descriptor_manager_;
     static std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> size_classes_;
     static std::array<arena_descriptor_base*, 23> size_class_cache_;
-
-    static std::array<arena_descriptor_base*, MaxSize/ArenaSize> descriptors_;
 };
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> segment_manager<PageSize, ArenaSize, MaxSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::segment_manager_;
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> segment_manager<PageSize, DescriptorSize, MaxSize/ArenaSize * DescriptorSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::descriptor_manager_;
+
+template < std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> descriptor_manager<PageSize, DescriptorSize, MaxSize/ArenaSize*DescriptorSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::descriptor_manager_;
+
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_classes_;
+
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<arena_descriptor_base*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_class_cache_;
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<arena_descriptor_base*, MaxSize/ArenaSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::descriptors_;
 
 template <typename T > class allocator
     : public arena_allocator_base< 1<<21, 1<<17, 1ull<<40 >
