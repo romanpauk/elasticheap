@@ -478,7 +478,7 @@ template< std::size_t PageSize, std::size_t DescriptorSize, std::size_t MaxSize 
         munmap(mmap_, MmapSize);
     }
 
-    void* allocate_segment(std::size_t i) {
+    void* allocate_descriptor(std::size_t i) {
         assert(i < MaxSize / DescriptorSize);
         if (refs_[ref(i)]++ == 0) {
             auto ptr = &memory_[i*DescriptorSize];
@@ -489,11 +489,11 @@ template< std::size_t PageSize, std::size_t DescriptorSize, std::size_t MaxSize 
         return &memory_[i * DescriptorSize];
     }
 
-    void deallocate_segment(void* ptr) {
-        deallocate_segment(get_segment_index(ptr));
+    void deallocate_descriptor(void* ptr) {
+        deallocate_descriptor(get_descriptor_index(ptr));
     }
 
-    void deallocate_segment(std::size_t i) {
+    void deallocate_descriptor(std::size_t i) {
         assert(i < MaxSize / DescriptorSize);
         assert(refs_[ref(i)] > 0);
         if (--refs_[ref(i)] == 0) {
@@ -508,7 +508,7 @@ template< std::size_t PageSize, std::size_t DescriptorSize, std::size_t MaxSize 
         return DescriptorSize * i / PageSize;
     }
 
-    uint32_t get_segment_index(void* desc) {
+    uint32_t get_descriptor_index(void* desc) {
         auto index = ((uint8_t*)desc - memory_)/DescriptorSize;
         assert(index < MaxSize/DescriptorSize);
         return index;
@@ -822,26 +822,24 @@ protected:
     }
 
     template< typename std::size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* get_descriptor(void* ptr) {
-        auto si = segment_manager_.get_segment_index(ptr);
-        //return (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_segment(si);
-        return (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_descriptor(si);
+        auto index = segment_manager_.get_segment_index(ptr);
+        return (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_descriptor(index);
     }
 
     template< size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* allocate_descriptor() {
         auto size = size_class_offset(SizeClass);
         void* buffer = segment_manager_.allocate_segment();
-        auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.allocate_segment(segment_manager_.get_segment_index(buffer));
-        //descriptors_[segment_manager_.get_segment_index(buffer)] = desc;
+        auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.allocate_descriptor(segment_manager_.get_segment_index(buffer));
         new(desc) arena_descriptor< ArenaSize, SizeClass >(buffer);
-        size_classes_[size].push(descriptor_manager_.get_segment_index(desc));
+        size_classes_[size].push(descriptor_manager_.get_descriptor_index(desc));
         return desc;
     }
 
     template< size_t SizeClass > void deallocate_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
         auto size = size_class_offset(SizeClass);
-        if (size_classes_[size].top() != descriptor_manager_.get_segment_index(desc)) {
+        if (size_classes_[size].top() != descriptor_manager_.get_descriptor_index(desc)) {
             segment_manager_.deallocate_segment(desc->begin());
-            descriptor_manager_.deallocate_segment(desc);
+            descriptor_manager_.deallocate_descriptor(desc);
         }
     }
 
@@ -853,11 +851,11 @@ protected:
     template< size_t SizeClass > void push_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
         (void)desc;
         auto size = size_class_offset(SizeClass);
-        size_classes_[size].push(descriptor_manager_.get_segment_index(desc));
+        size_classes_[size].push(descriptor_manager_.get_descriptor_index(desc));
     }
 
     template< std::size_t SizeClass > bool validate_descriptor_state(arena_descriptor<ArenaSize, SizeClass>* desc) {
-        auto index = descriptor_manager_.get_segment_index(desc);
+        auto index = descriptor_manager_.get_descriptor_index(desc);
         auto* segment = segment_manager_.get_segment(index);
         void* page = segment_manager_.get_page(segment);
         if (!segment_manager_.is_page_deallocated(page)) {
