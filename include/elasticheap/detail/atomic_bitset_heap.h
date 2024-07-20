@@ -54,11 +54,11 @@ template< typename T, std::size_t Capacity > struct atomic_bitset_heap {
     again:
         auto [max, min] = unpack(range);
         if (min < Capacity) {
-            for(std::size_t i = min + 1; i <= max; ++i) {
+            for(std::size_t i = min; i < max; ++i) {
                 if (bitmap_.get(i)) {
-                    if (range_.compare_exchange_strong(range, pack(max, i), std::memory_order_relaxed)) {
-                        bitmap_.clear(min);
-                        value = min;
+                    if (range_.compare_exchange_strong(range, pack(max, i + 1), std::memory_order_relaxed)) {
+                        bitmap_.clear(i);
+                        value = i;
                         return true;
                     }
 
@@ -67,6 +67,7 @@ template< typename T, std::size_t Capacity > struct atomic_bitset_heap {
             }
 
             if (range_.compare_exchange_strong(range, Capacity, std::memory_order_relaxed)) {
+                bitmap_.clear(min);
                 value = min;
                 return true;
             } else {

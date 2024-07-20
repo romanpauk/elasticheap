@@ -297,8 +297,9 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
         begin_ = (uint8_t*)buffer;
         size_class_ = SizeClass;
         free_list_size_ = 0;
-        for(std::size_t i = Capacity - 1; i > 0; --i)
+        for(int i = Capacity - 1; i >= 0; --i) {
             free_list_.push(i, free_list_size_);
+        }
     }
 
     //using free_list_type = arena_free_list< uint16_t, Capacity >;
@@ -484,6 +485,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
         uint32_t page = 0;
         if (deallocated_pages_.pop(page)) {
             ptr = get_page(page);
+            assert(!is_page_deallocated(ptr));
         } else {
             if (memory_size_ == PageCount) {
                 fprintf(stderr, "Out of memory\n");
@@ -504,6 +506,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
 
     void deallocate_page(void* ptr) {
         assert(is_page_valid(ptr));
+        assert(!is_page_deallocated(ptr));
 
         //mprotect(ptr, PageSize, PROT_NONE);
         madvise(ptr, PageSize, MADV_DONTNEED);
@@ -587,11 +590,11 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         auto& pdesc = get_page_descriptor(page);
         assert(!pdesc.bitmap.full());
 
-        void* arena = 0;
+        void* segment = 0;
         for (size_t i = 0; i < PageSegmentCount; ++i) {
             if (!pdesc.bitmap.get(i)) {
                 pdesc.bitmap.set(i);
-                arena = (uint8_t*)page + SegmentSize * i;
+                segment = (uint8_t*)page + SegmentSize * i;
                 if (pdesc.bitmap.full()) {
                     assert(page_manager_.get_page(allocated_pages_.top()) == page);
                     allocated_pages_.pop();
@@ -601,12 +604,12 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
             }
         }
 
-        assert(is_segment_valid(arena));
+        assert(is_segment_valid(segment));
 
     #if defined(STATS)
         ++stats.arenas_allocated;
     #endif
-        return arena;
+        return segment;
     }
 
     void* get_segment(void* ptr) const {
@@ -763,6 +766,7 @@ protected:
         }
 
         auto* desc = allocate_descriptor<SizeClass>();
+        assert(desc->size() == 0);
         size_class_cache_[size] = desc;
         return desc;
     }
@@ -782,12 +786,11 @@ protected:
         return desc;
     }
 
-    template< size_t SizeClass > void deallocate_descriptor(void* ptr) {
+    template< size_t SizeClass > void deallocate_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
         auto size = size_class_offset(SizeClass);
-        if (size_classes_[size].top() != descriptor_manager_.get_segment_index(descriptors_[segment_manager_.get_segment_index(ptr)])) {
-            auto* desc = descriptors_[segment_manager_.get_segment_index(ptr)];
+        if (size_classes_[size].top() != descriptor_manager_.get_segment_index(desc)) {
+            segment_manager_.deallocate_segment(desc->begin());
             descriptor_manager_.deallocate_segment(desc);
-            segment_manager_.deallocate_segment(ptr);
         }
     }
 
