@@ -459,6 +459,47 @@ private:
     elastic_vector<T, Size> values_;
 };
 
+template< std::size_t PageSize, std::size_t DescriptorSize, std::size_t MaxSize > struct descriptor_manager {
+    static constexpr std::size_t MmapSize = (MaxSize + PageSize - 1) & ~(PageSize - 1);
+    static_assert(PageSize / DescriptorSize <= 256);
+
+    descriptor_manager() {
+        mmap_ = (uint8_t*)mmap(0, MmapSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (mmap_ == MAP_FAILED)
+            std::abort();
+
+        memory_ = (uint8_t*)align<PageSize>(mmap_);
+    }
+
+    ~descriptor_manager() {
+        munmap(mmap_, MmapSize);
+    }
+
+    void* get_descriptor(std::size_t i) {
+        if (refs_[ref(i)]++ == 0) {
+            mprotect(mask<PageSize>(&memory_[(i * DescriptorSize) / PageSize]), PageSize, PROT_READ | PROT_WRITE);
+        }
+
+        return &memory_[i * DescriptorSize];
+    }
+
+    void release_descriptor(std::size_t i) {
+        if (--refs_[ref(i)] == 0) {
+            madvise(mask<PageSize>(&memory_[(i * DescriptorSize) / PageSize]), PageSize, MADV_DONTNEED);
+        }
+    }
+
+    std::size_t ref(std::size_t i) {
+        assert(i < values_.size());
+        return DescriptorSize * i / PageSize;
+    }
+
+private:
+    std::array<uint8_t, MaxSize / DescriptorSize / PageSize> refs_;
+    void* mmap_ = 0;
+    uint8_t* memory_ = 0;
+};
+
 template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
     static constexpr std::size_t MmapSize = MaxSize + PageSize - 1;
     static constexpr std::size_t PageCount = MaxSize / PageSize;
