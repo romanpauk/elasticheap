@@ -472,7 +472,13 @@ private:
 
 template< typename T, std::size_t Size, std::size_t PageSize > struct elastic_array {
     static constexpr std::size_t MmapSize = (sizeof(T) * Size + PageSize - 1) & ~(PageSize - 1);
-    static_assert(PageSize / sizeof(T) <= 256);
+
+    using counter_type =
+        std::conditional_t< PageSize / sizeof(T) <= std::numeric_limits<uint8_t>::max(), uint8_t,
+        std::conditional_t< PageSize / sizeof(T) <= std::numeric_limits<uint16_t>::max(), uint16_t,
+        std::conditional_t< PageSize / sizeof(T) <= std::numeric_limits<uint32_t>::max(), uint32_t,
+        uint64_t
+    >>>;
 
     elastic_array(void* memory) {
         memory_ = (T*)align<PageSize>(memory);
@@ -520,14 +526,13 @@ template< typename T, std::size_t Size, std::size_t PageSize > struct elastic_ar
     }
 
 private:
-    std::array<uint8_t, (sizeof(T) * Size + PageSize - 1) / PageSize > page_refs_ = {0};
+    std::array<counter_type, (sizeof(T) * Size + PageSize - 1) / PageSize > page_refs_ = {0};
     void* mmap_ = 0;
     T* memory_ = 0;
 };
 
 template< typename T, std::size_t Size, std::size_t PageSize > struct descriptor_manager {
     static constexpr std::size_t MmapSize = (sizeof(T) * Size + PageSize - 1) & ~(PageSize - 1);
-    static_assert(PageSize / sizeof(T) <= 256);
 
     descriptor_manager()
         : mmap_(mmap(0, MmapSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0))
@@ -677,23 +682,24 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         }
 
         void* page = page_manager_.allocate_page();
-        auto& pdesc = get_page_descriptor(page);
-        pdesc.bitmap.clear();
+        auto index = page_manager_.get_page_index(page);
+        auto* pdesc = page_descriptors_.allocate_descriptor(index);
+        pdesc->bitmap.clear();
         allocated_pages_.push(page_manager_.get_page_index(page));
         return page;
     }
 
     void* allocate_segment() {
         void* page = get_allocated_page();
-        auto& pdesc = get_page_descriptor(page);
-        assert(!pdesc.bitmap.full());
+        auto* pdesc = page_descriptors_.get_descriptor(page_manager_.get_page_index(page));
+        assert(!pdesc->bitmap.full());
 
         void* segment = 0;
         for (size_t i = 0; i < PageSegmentCount; ++i) {
-            if (!pdesc.bitmap.get(i)) {
-                pdesc.bitmap.set(i);
+            if (!pdesc->bitmap.get(i)) {
+                pdesc->bitmap.set(i);
                 segment = (uint8_t*)page + SegmentSize * i;
-                if (pdesc.bitmap.full()) {
+                if (pdesc->bitmap.full()) {
                     assert(page_manager_.get_page(allocated_pages_.top()) == page);
                     allocated_pages_.pop();
                 }
@@ -725,15 +731,15 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
     void deallocate_segment(void* ptr) {
         assert(is_segment_valid(ptr));
         void* page = page_manager_.get_page(ptr);
-        auto& pdesc = get_page_descriptor(page);
+        auto* pdesc = page_descriptors_.get_descriptor(page_manager_.get_page_index(page));
 
-        if (pdesc.bitmap.full())
+        if (pdesc->bitmap.full())
             allocated_pages_.push(page_manager_.get_page_index(page));
 
         int index = ((uint8_t*)ptr - (uint8_t*)page)/SegmentSize;
         assert(index < PageSegmentCount);
-        pdesc.bitmap.clear(index);
-        if (pdesc.bitmap.empty()) {
+        pdesc->bitmap.clear(index);
+        if (pdesc->bitmap.empty()) {
             page_manager_.deallocate_page(page);
         }
     }
@@ -743,7 +749,7 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
     }
 
     page_descriptor& get_page_descriptor(void* page) {
-        return page_descriptors_[page_manager_.get_page_index(page)];
+        return *page_descriptors_.get_descriptor(page_manager_.get_page_index(page));
     }
 
     bool is_page_deallocated(void* page) {
@@ -759,7 +765,7 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
 private:
     page_manager< PageSize, MaxSize > page_manager_;
     detail::bitset_heap< uint32_t, PageCount > allocated_pages_;
-    page_descriptor page_descriptors_[PageCount];
+    descriptor_manager< page_descriptor, PageCount, PageSize > page_descriptors_;
 };
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > class arena_allocator_base {
