@@ -529,12 +529,12 @@ template< typename T, std::size_t Size, std::size_t PageSize > struct descriptor
     static constexpr std::size_t MmapSize = (sizeof(T) * Size + PageSize - 1) & ~(PageSize - 1);
     static_assert(PageSize / sizeof(T) <= 256);
 
-    descriptor_manager() {
-        mmap_ = (uint8_t*)mmap(0, MmapSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    descriptor_manager()
+        : mmap_(mmap(0, MmapSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0))
+        , values_(align<PageSize>(mmap_))
+    {
         if (mmap_ == MAP_FAILED)
             __failure("mmap");
-
-        memory_ = (T*)align<PageSize>(mmap_);
     }
 
     ~descriptor_manager() {
@@ -542,50 +542,28 @@ template< typename T, std::size_t Size, std::size_t PageSize > struct descriptor
     }
 
     T* allocate_descriptor(std::size_t i) {
-        assert(i < Size);
-        if (refs_[ref(i)]++ == 0) {
-            auto ptr = &memory_[i];
-            if (mprotect(mask<PageSize>(&memory_[i]), PageSize, PROT_READ | PROT_WRITE) != 0)
-                __failure("mprotect");
-        }
-
-        return &memory_[i];
+        return values_.acquire(i);
     }
 
     void deallocate_descriptor(void* ptr) {
-        deallocate_descriptor(get_descriptor_index(ptr));
+        return values_.release((T*)ptr);
     }
 
     void deallocate_descriptor(std::size_t i) {
-        assert(i < Size);
-        assert(refs_[ref(i)] > 0);
-        if (--refs_[ref(i)] == 0) {
-            auto ptr = mask<PageSize>(&memory_[i]);
-            if (madvise(mask<PageSize>(&memory_[i]), PageSize, MADV_DONTNEED) != 0)
-                __failure("madvise");
-        }
-    }
-
-    std::size_t ref(std::size_t i) {
-        assert(i < Size);
-        return i * sizeof(T) / PageSize;
+        return values_.release(i);
     }
 
     uint32_t get_descriptor_index(void* desc) {
-        auto index = (T*)desc - memory_;
-        assert(index < Size);
-        return index;
+        return values_.get_index((T*)desc);
     }
 
     T* get_descriptor(uint32_t index) {
-        assert(index < Size);
-        return memory_ + index;
+        return values_.get(index);
     }
 
 private:
-    std::array<uint8_t, (sizeof(T) * Size + PageSize - 1) / PageSize > refs_ = {0};
     void* mmap_ = 0;
-    T* memory_ = 0;
+    elastic_array< T, Size, PageSize > values_;
 };
 
 template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
