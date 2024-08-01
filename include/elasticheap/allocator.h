@@ -473,22 +473,22 @@ template< typename T, std::size_t Size, std::size_t PageSize > struct descriptor
         if (mmap_ == MAP_FAILED)
             __failure("mmap");
 
-        memory_ = (uint8_t*)align<PageSize>(mmap_);
+        memory_ = (T*)align<PageSize>(mmap_);
     }
 
     ~descriptor_manager() {
         munmap(mmap_, MmapSize);
     }
 
-    void* allocate_descriptor(std::size_t i) {
+    T* allocate_descriptor(std::size_t i) {
         assert(i < Size);
         if (refs_[ref(i)]++ == 0) {
-            auto ptr = &memory_[i * sizeof(T)];
-            if (mprotect(mask<PageSize>(&memory_[i * sizeof(T)]), PageSize, PROT_READ | PROT_WRITE) != 0)
+            auto ptr = &memory_[i];
+            if (mprotect(mask<PageSize>(&memory_[i]), PageSize, PROT_READ | PROT_WRITE) != 0)
                 __failure("mprotect");
         }
 
-        return &memory_[i * sizeof(T)];
+        return &memory_[i];
     }
 
     void deallocate_descriptor(void* ptr) {
@@ -499,32 +499,32 @@ template< typename T, std::size_t Size, std::size_t PageSize > struct descriptor
         assert(i < Size);
         assert(refs_[ref(i)] > 0);
         if (--refs_[ref(i)] == 0) {
-            auto ptr = mask<PageSize>(&memory_[i * sizeof(T)]);
-            if (madvise(mask<PageSize>(&memory_[i * sizeof(T)]), PageSize, MADV_DONTNEED) != 0)
+            auto ptr = mask<PageSize>(&memory_[i]);
+            if (madvise(mask<PageSize>(&memory_[i]), PageSize, MADV_DONTNEED) != 0)
                 __failure("madvise");
         }
     }
 
     std::size_t ref(std::size_t i) {
         assert(i < Size);
-        return sizeof(T) * i / PageSize;
+        return i * sizeof(T) / PageSize;
     }
 
     uint32_t get_descriptor_index(void* desc) {
-        auto index = ((uint8_t*)desc - memory_) / sizeof(T);
+        auto index = (T*)desc - memory_;
         assert(index < Size);
         return index;
     }
 
-    void* get_descriptor(uint32_t index) {
+    T* get_descriptor(uint32_t index) {
         assert(index < Size);
-        return memory_ + index * sizeof(T);
+        return memory_ + index;
     }
 
 private:
     std::array<uint8_t, (sizeof(T) * Size + PageSize - 1) / PageSize > refs_ = {0};
     void* mmap_ = 0;
-    uint8_t* memory_ = 0;
+    T* memory_ = 0;
 };
 
 template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
