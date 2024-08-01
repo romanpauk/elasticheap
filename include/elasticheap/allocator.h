@@ -29,7 +29,7 @@
 #define assert(exp) \
     do { \
         if(!(exp)) { \
-            fprintf(stderr, "Assertion failed: " #exp "\n"); \
+            fprintf(stderr, "%s: %d: Assertion failed: " #exp "\n", __FILE__, __LINE__); \
             std::abort(); \
         } \
     } while(0);
@@ -38,6 +38,8 @@
 #define __assume(cond) do { if (!(cond)) __builtin_unreachable(); } while (0)
 #define __likely(cond) __builtin_expect((cond), true)
 #define __unlikely(cond) __builtin_expect((cond), false)
+#define __failure(msg) do { fprintf(stderr, "%s:%d: %s: %s", \
+    __FILE__, __LINE__, __PRETTY_FUNCTION__, msg); } while(0)
 
 //#define STATS
 //#define THREADS
@@ -358,7 +360,7 @@ template< typename T, std::size_t Size, std::size_t PageSize = 4096 > struct ela
     elastic_vector() {
         memory_ = (T*)mmap(0, sizeof(T) * Size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (memory_ == MAP_FAILED)
-            std::abort();
+            __failure("mmap");
     }
 
     ~elastic_vector() {
@@ -469,7 +471,7 @@ template< std::size_t PageSize, std::size_t DescriptorSize, std::size_t MaxSize 
     descriptor_manager() {
         mmap_ = (uint8_t*)mmap(0, MmapSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (mmap_ == MAP_FAILED)
-            std::abort();
+            __failure("mmap");
 
         memory_ = (uint8_t*)align<PageSize>(mmap_);
     }
@@ -483,7 +485,7 @@ template< std::size_t PageSize, std::size_t DescriptorSize, std::size_t MaxSize 
         if (refs_[ref(i)]++ == 0) {
             auto ptr = &memory_[i*DescriptorSize];
             if (mprotect(mask<PageSize>(&memory_[i * DescriptorSize]), PageSize, PROT_READ | PROT_WRITE) != 0)
-                std::abort();
+                __failure("mprotect");
         }
 
         return &memory_[i * DescriptorSize];
@@ -499,7 +501,7 @@ template< std::size_t PageSize, std::size_t DescriptorSize, std::size_t MaxSize 
         if (--refs_[ref(i)] == 0) {
             auto ptr = mask<PageSize>(&memory_[i * DescriptorSize]);
             if (madvise(mask<PageSize>(&memory_[i * DescriptorSize]), PageSize, MADV_DONTNEED) != 0)
-                std::abort();
+                __failure("madvise");
         }
     }
 
@@ -533,7 +535,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
     page_manager() {
         mmap_ = (uint8_t*)mmap(0, MmapSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (mmap_ == MAP_FAILED)
-            std::abort();
+            __failure("mmap");
 
         memory_ = align<PageSize>(mmap_);
     }
@@ -550,8 +552,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
             assert(!is_page_deallocated(ptr));
         } else {
             if (memory_size_ == PageCount) {
-                fprintf(stderr, "Out of memory\n");
-                std::abort();
+                __failure("out of memory");
             }
             ptr = (uint8_t*)memory_ + memory_size_.fetch_add(1, std::memory_order_relaxed) * PageSize;
         }
@@ -767,7 +768,7 @@ protected:
         case 12288: return 21;
         case 16384: return 22;
         default:
-            std::abort();
+            __failure("invalid class size");
         }
     }
 
