@@ -406,14 +406,20 @@ template< typename T, std::size_t Size, std::size_t PageSize = 4096 > struct ela
 private:
     void grow(size_type n = 1) {
         if (size_ + n > size_commited_) {
-            mprotect((uint8_t*)memory_ + size_commited_ * sizeof(T), PageSize, PROT_READ | PROT_WRITE);
+            if (mprotect((uint8_t*)memory_ + size_commited_ * sizeof(T), PageSize, PROT_READ | PROT_WRITE) == -1) {
+                // TODO
+                // __failure("mprotect");
+            }
             size_commited_ += PageSize/sizeof(T);
         }
     }
 
     void shrink() {
         if (size_ + PageSize/sizeof(T) < size_commited_) {
-            mprotect((uint8_t*)memory_ + size_commited_ * sizeof(T) - PageSize/sizeof(T), PageSize, PROT_NONE);
+            if (mprotect((uint8_t*)memory_ + size_commited_ * sizeof(T) - PageSize/sizeof(T), PageSize, PROT_NONE) == -1) {
+                // TODO
+                // __failure("mprotect");
+            }
             size_commited_ -= PageSize/sizeof(T);
         }
     }
@@ -462,6 +468,61 @@ template< typename T, std::size_t Size, typename Compare = std::greater<> > stru
 
 private:
     elastic_vector<T, Size> values_;
+};
+
+template< typename T, std::size_t Size, std::size_t PageSize > struct elastic_array {
+    static constexpr std::size_t MmapSize = (sizeof(T) * Size + PageSize - 1) & ~(PageSize - 1);
+    static_assert(PageSize / sizeof(T) <= 256);
+
+    elastic_array(void* memory) {
+        memory_ = (T*)align<PageSize>(memory);
+    }
+
+    T* acquire(std::size_t i) {
+        assert(i < Size);
+        if (page_refs_[page(i)]++ == 0) {
+            auto ptr = &memory_[i];
+            if (mprotect(mask<PageSize>(&memory_[i]), PageSize, PROT_READ | PROT_WRITE) != 0)
+                __failure("mprotect");
+        }
+
+        return &memory_[i];
+    }
+
+    void release(T* ptr) {
+        release(get_index(ptr));
+    }
+
+    void release(std::size_t i) {
+        assert(i < Size);
+        assert(page_refs_[page(i)] > 0);
+        if (--page_refs_[page(i)] == 0) {
+            auto ptr = mask<PageSize>(&memory_[i]);
+            if (madvise(mask<PageSize>(&memory_[i]), PageSize, MADV_DONTNEED) != 0)
+                __failure("madvise");
+        }
+    }
+
+    std::size_t page(std::size_t i) {
+        assert(i < Size);
+        return i * sizeof(T) / PageSize;
+    }
+
+    uint32_t get_index(T* desc) {
+        auto index = desc - memory_;
+        assert(index < Size);
+        return index;
+    }
+
+    T* get(uint32_t index) {
+        assert(index < Size);
+        return memory_ + index;
+    }
+
+private:
+    std::array<uint8_t, (sizeof(T) * Size + PageSize - 1) / PageSize > page_refs_ = {0};
+    void* mmap_ = 0;
+    T* memory_ = 0;
 };
 
 template< typename T, std::size_t Size, std::size_t PageSize > struct descriptor_manager {
