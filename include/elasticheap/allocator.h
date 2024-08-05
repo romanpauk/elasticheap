@@ -658,6 +658,88 @@ private:
     alignas(64) detail::atomic_bitset_heap< uint32_t, PageCount > deallocated_pages_;
 };
 
+template< typename T, std::size_t Capacity, std::size_t PageSize > struct elastic_bitset_heap {
+    static constexpr std::size_t MmapSize = sizeof(detail::bitset<Capacity>) + PageSize - 1;
+
+    elastic_bitset_heap()
+        : mmap_(mmap(0, MmapSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0))
+    {
+        if (mmap_ == MAP_FAILED)
+            __failure("mmap");
+        bitmap_ = (detail::bitset<Capacity>*)align<PageSize>(mmap_);
+    }
+
+    ~elastic_bitset_heap() {
+        munmap(mmap_, MmapSize);
+    }
+
+    void push(T value) {
+        assert(value < Capacity);
+        if (page_refs_[page(value)]++ == 0) {
+            if (mprotect((uint8_t*)bitmap_ + page(value), PageSize, PROT_READ|PROT_WRITE) == -1)
+                __failure("mprotect");
+        }
+
+        assert(!bitmap_->get(value));
+        bitmap_->set(value);
+        ++size_;
+        min_ = min_ > value ? value : min_;
+        max_ = max_ < value ? value : max_;
+    }
+
+    bool empty() const {
+        return size_ == 0;
+    }
+
+    T pop() {
+        assert(!empty());
+        T min = min_;
+        assert(page_refs_[page(min)] > 0);
+        assert(bitmap_.get(min));
+        bitmap_->clear(min);
+        if (--page_refs_[page(min)] == 0) {
+            if (madvise((uint8_t*)bitmap_ + page(min), PageSize, MADV_DONTNEED) == -1)
+                __failure("madvise");
+        }
+
+        --size_;
+        for(std::size_t i = min + 1; i <= max_; ++i) {
+            if (bitmap_->get(i)) {
+                min_ = i;
+                return min;
+            }
+        }
+
+        min_ = Capacity;
+        max_ = 0;
+
+        return min;
+    }
+
+    const T& top() {
+        assert(!empty());
+        return min_;
+    }
+
+    std::size_t size() const { return size_; }
+    static constexpr std::size_t capacity() { return Capacity; }
+
+    std::size_t page(std::size_t index) {
+        assert(index < Capacity);
+        return index / PageSize;
+    }
+
+private:
+    std::array< uint32_t, (Capacity + PageSize - 1) / PageSize > page_refs_ = {0};
+
+    std::size_t size_ = 0;
+    T min_ = Capacity;
+    T max_ = 0;
+
+    void* mmap_;
+    detail::bitset<Capacity>* bitmap_;
+};
+
 template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > struct segment_manager {
     static_assert((SegmentSize & (SegmentSize - 1)) == 0);
 
@@ -764,7 +846,8 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
 
 private:
     page_manager< PageSize, MaxSize > page_manager_;
-    detail::bitset_heap< uint32_t, PageCount > allocated_pages_;
+    //detail::bitset_heap< uint32_t, PageCount > allocated_pages_;
+    elastic_bitset_heap< uint32_t, PageCount, PageSize > allocated_pages_;
     descriptor_manager< page_descriptor, PageCount, PageSize > page_descriptors_;
 };
 
