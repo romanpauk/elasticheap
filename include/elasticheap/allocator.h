@@ -571,12 +571,132 @@ private:
     elastic_array< T, Size, PageSize > values_;
 };
 
+#if 1
+template< typename T, std::size_t Capacity, std::size_t PageSize > struct elastic_atomic_bitset_heap {
+    static constexpr std::size_t MmapSize = sizeof(detail::atomic_bitset<Capacity>) + PageSize - 1;
+    static_assert(Capacity <= std::numeric_limits<uint32_t>::max());
+
+    using counter_type =
+        std::conditional_t< PageSize / sizeof(T) <= std::numeric_limits<uint8_t>::max(), uint8_t,
+        std::conditional_t< PageSize / sizeof(T) <= std::numeric_limits<uint16_t>::max(), uint16_t,
+        std::conditional_t< PageSize / sizeof(T) <= std::numeric_limits<uint32_t>::max(), uint32_t,
+        uint64_t
+    >>>;
+
+    static constexpr std::size_t capacity() { return Capacity; }
+
+    elastic_atomic_bitset_heap(std::atomic<uint64_t>& range)
+        : mmap_((uint8_t*)mmap(0, MmapSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0))
+    {
+        if (mmap_ == MAP_FAILED)
+            __failure("mmap");
+        bitmap_ = (detail::atomic_bitset<Capacity>*)align<PageSize>(mmap_);
+        range.store(Capacity, std::memory_order_relaxed);
+    }
+
+    void push(std::atomic<uint64_t>& range, T value) {
+        auto r = range.load(std::memory_order_acquire);
+
+        assert(value < Capacity);
+
+        if (page_refs_[page(value)]++ == 0) {
+            if (mprotect((uint8_t*)bitmap_ + page(value) * PageSize, PageSize, PROT_READ|PROT_WRITE) == -1)
+                __failure("mprotect");
+        }
+
+        assert(!bitmap_->get(value));
+        bitmap_->set(value);
+
+        while(true) {
+            auto [max, min] = unpack(r);
+            if (max >= value && min <= value) {
+                std::atomic_thread_fence(std::memory_order_release);
+                return;
+            }
+
+            if(range.compare_exchange_strong(r, pack(std::max<T>(max, value), std::min<T>(min, value)), std::memory_order_release)) {
+                return;
+            }
+        }
+    }
+
+    bool empty(std::atomic<uint64_t>& range) const {
+        return (uint32_t)range.load(std::memory_order_relaxed) == Capacity;
+    }
+
+    bool pop(std::atomic<uint64_t>& range, T& value) {
+        auto r = range.load(std::memory_order_acquire);
+    again:
+        auto [max, min] = unpack(range);
+        if (min < Capacity) {
+            for(std::size_t i = min; i < max; ++i) {
+                if (bitmap_->get(i)) {
+                    if (range.compare_exchange_strong(r, pack(max, i + 1), std::memory_order_relaxed)) {
+                        bitmap_->clear(i);
+
+                        if (--page_refs_[page(i)] == 0) {
+                            if (madvise((uint8_t*)bitmap_ + page(i) * PageSize, PageSize, MADV_DONTNEED) == -1)
+                                __failure("madvise");
+                        }
+
+                        value = i;
+                        return true;
+                    }
+
+                    goto again;
+                }
+            }
+
+            if (range.compare_exchange_strong(r, Capacity, std::memory_order_relaxed)) {
+                bitmap_->clear(min);
+                if (--page_refs_[page(min)] == 0) {
+                    if (madvise((uint8_t*)bitmap_ + page(min) * PageSize, PageSize, MADV_DONTNEED) == -1)
+                        __failure("madvise");
+                }
+
+                value = min;
+                return true;
+            } else {
+                goto again;
+            }
+        }
+
+        return false;
+    }
+
+    bool get(T value) const {
+        return bitmap_->get(value);
+    }
+
+    std::size_t page(std::size_t index) {
+        assert(index < Capacity);
+        return index / (PageSize * 8);
+    }
+
+private:
+    std::tuple< uint32_t, uint32_t > unpack(uint64_t range) {
+        return { range >> 32, range };
+    }
+
+    uint64_t pack(uint32_t max, uint32_t min) {
+        return ((uint64_t)max << 32) | min;
+    }
+
+    std::array<counter_type, (Capacity + PageSize * 8 - 1) / (PageSize * 8) > page_refs_;
+
+    uint8_t* mmap_;
+    detail::atomic_bitset<Capacity>* bitmap_;
+};
+#endif
+
 template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
     static constexpr std::size_t MmapSize = MaxSize + PageSize - 1;
     static constexpr std::size_t PageCount = MaxSize / PageSize;
     static_assert(PageCount <= std::numeric_limits< uint32_t >::max());
 
-    page_manager() {
+    page_manager()
+        : deallocated_pages_(deallocated_range_)
+    {
         mmap_ = (uint8_t*)mmap(0, MmapSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (mmap_ == MAP_FAILED)
             __failure("mmap");
@@ -591,7 +711,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
     void* allocate_page() {
         void* ptr = 0;
         uint32_t page = 0;
-        if (deallocated_pages_.pop(page)) {
+        if (deallocated_pages_.pop(deallocated_range_, page)) {
             ptr = get_page(page);
             assert(!is_page_deallocated(ptr));
         } else {
@@ -616,7 +736,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
         //mprotect(ptr, PageSize, PROT_NONE);
         madvise(ptr, PageSize, MADV_DONTNEED);
 
-        deallocated_pages_.push(get_page_index(ptr));
+        deallocated_pages_.push(deallocated_range_, get_page_index(ptr));
     #if defined(STATS)
         --stats.pages_allocated;
     #endif
@@ -652,10 +772,11 @@ private:
         return true;
     }
 
+    alignas(64) std::atomic<uint64_t> memory_size_ = 0;
     void* mmap_ = 0;
     void* memory_ = 0;
-    alignas(64) std::atomic<uint64_t> memory_size_ = 0;
     alignas(64) detail::atomic_bitset_heap< uint32_t, PageCount > deallocated_pages_;
+    std::atomic<uint64_t> deallocated_range_;
 };
 
 template< typename T, std::size_t Capacity, std::size_t PageSize > struct elastic_bitset_heap {
@@ -676,7 +797,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
     void push(T value) {
         assert(value < Capacity);
         if (page_refs_[page(value)]++ == 0) {
-            if (mprotect((uint8_t*)bitmap_ + page(value), PageSize, PROT_READ|PROT_WRITE) == -1)
+            if (mprotect((uint8_t*)bitmap_ + page(value) * PageSize, PageSize, PROT_READ|PROT_WRITE) == -1)
                 __failure("mprotect");
         }
 
@@ -698,7 +819,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
         assert(bitmap_.get(min));
         bitmap_->clear(min);
         if (--page_refs_[page(min)] == 0) {
-            if (madvise((uint8_t*)bitmap_ + page(min), PageSize, MADV_DONTNEED) == -1)
+            if (madvise((uint8_t*)bitmap_ + page(min) * PageSize, PageSize, MADV_DONTNEED) == -1)
                 __failure("madvise");
         }
 
@@ -726,11 +847,11 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
 
     std::size_t page(std::size_t index) {
         assert(index < Capacity);
-        return index / PageSize;
+        return index / (PageSize * 8);
     }
 
 private:
-    std::array< uint32_t, (Capacity + PageSize - 1) / PageSize > page_refs_ = {0};
+    std::array< uint32_t, (Capacity + PageSize * 8 - 1) / (PageSize * 8) > page_refs_ = {0};
 
     std::size_t size_ = 0;
     T min_ = Capacity;
@@ -846,7 +967,6 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
 
 private:
     page_manager< PageSize, MaxSize > page_manager_;
-    //detail::bitset_heap< uint32_t, PageCount > allocated_pages_;
     elastic_bitset_heap< uint32_t, PageCount, PageSize > allocated_pages_;
     descriptor_manager< page_descriptor, PageCount, PageSize > page_descriptors_;
 };

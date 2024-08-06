@@ -18,7 +18,7 @@ static void bitset_heap(benchmark::State& state) {
         for(size_t j = 0; j < state.range(); ++j) {
             values.push(j);
         }
-            
+
         for(size_t j = 0; j < state.range(); ++j) {
             tmp = values.pop();
         }
@@ -29,15 +29,16 @@ static void bitset_heap(benchmark::State& state) {
 }
 
 static void atomic_bitset_heap(benchmark::State& state) {
-    elasticheap::detail::atomic_bitset_heap<uint16_t, 1<<15> values;
+    std::atomic<uint64_t> range;
+    elasticheap::detail::atomic_bitset_heap<uint16_t, 1<<15> values(range);
     uint16_t tmp = 0;
     for (auto _ : state) {
         for(size_t j = 0; j < state.range(); ++j) {
-            values.push(j);
+            values.push(range, j);
         }
-            
+
         for(size_t j = 0; j < state.range(); ++j) {
-            values.pop(tmp);
+            values.pop(range, tmp);
         }
     }
 

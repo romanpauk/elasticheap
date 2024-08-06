@@ -20,43 +20,43 @@ template< typename T, std::size_t Capacity > struct atomic_bitset_heap {
 
     static constexpr std::size_t capacity() { return Capacity; }
 
-    atomic_bitset_heap() {
+    atomic_bitset_heap(std::atomic<uint64_t>& range) {
         bitmap_.clear();
-        range_.store(Capacity, std::memory_order_relaxed);
+        range.store(Capacity, std::memory_order_relaxed);
     }
 
-    void push(T value) {
-        auto range = range_.load(std::memory_order_acquire);
+    void push(std::atomic<uint64_t>& range, T value) {
+        auto r = range.load(std::memory_order_acquire);
 
         assert(value < Capacity);
         assert(!bitmap_.get(value));
         bitmap_.set(value);
 
         while(true) {
-            auto [max, min] = unpack(range);
+            auto [max, min] = unpack(r);
             if (max >= value && min <= value) {
                 std::atomic_thread_fence(std::memory_order_release);
                 return;
             }
 
-            if(range_.compare_exchange_strong(range, pack(std::max<T>(max, value), std::min<T>(min, value)), std::memory_order_release)) {
+            if(range.compare_exchange_strong(r, pack(std::max<T>(max, value), std::min<T>(min, value)), std::memory_order_release)) {
                 return;
             }
         }
     }
 
-    bool empty() const {
-        return (uint32_t)range_.load(std::memory_order_relaxed) == Capacity;
+    bool empty(std::atomic<uint64_t>& range) const {
+        return (uint32_t)range.load(std::memory_order_relaxed) == Capacity;
     }
 
-    bool pop(T& value) {
-        auto range = range_.load(std::memory_order_acquire);
+    bool pop(std::atomic<uint64_t>& range, T& value) {
+        auto r = range.load(std::memory_order_acquire);
     again:
         auto [max, min] = unpack(range);
         if (min < Capacity) {
             for(std::size_t i = min; i < max; ++i) {
                 if (bitmap_.get(i)) {
-                    if (range_.compare_exchange_strong(range, pack(max, i + 1), std::memory_order_relaxed)) {
+                    if (range.compare_exchange_strong(r, pack(max, i + 1), std::memory_order_relaxed)) {
                         bitmap_.clear(i);
                         value = i;
                         return true;
@@ -66,7 +66,7 @@ template< typename T, std::size_t Capacity > struct atomic_bitset_heap {
                 }
             }
 
-            if (range_.compare_exchange_strong(range, Capacity, std::memory_order_relaxed)) {
+            if (range.compare_exchange_strong(r, Capacity, std::memory_order_relaxed)) {
                 bitmap_.clear(min);
                 value = min;
                 return true;
