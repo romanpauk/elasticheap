@@ -816,7 +816,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
         assert(!empty());
         T min = min_;
         assert(page_refs_[page(min)] > 0);
-        assert(bitmap_.get(min));
+        assert(bitmap_->get(min));
         bitmap_->clear(min);
         if (--page_refs_[page(min)] == 0) {
             if (madvise((uint8_t*)bitmap_ + page(min) * PageSize, PageSize, MADV_DONTNEED) == -1)
@@ -1045,7 +1045,7 @@ protected:
 
     template< size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* get_cached_descriptor() {
         auto size = size_class_offset(SizeClass);
-        assert(size_class_cache_[size] == descriptor_manager_.get_descriptor(size_classes_[size].top()));
+        assert((void*)size_class_cache_[size] == (void*)descriptor_manager_.get_descriptor(size_classes_[size].top()));
         return (arena_descriptor< ArenaSize, SizeClass >*)size_class_cache_[size];
     }
 
