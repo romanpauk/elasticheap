@@ -46,6 +46,8 @@
 #define MAGIC
 
 namespace elasticheap {
+    static constexpr std::size_t MetadataPageSize = 4096;
+
 #if defined(STATS)
     struct allocator_stats {
         uint64_t pages_allocated;
@@ -665,10 +667,12 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
     }
 
     bool get(T value) const {
-        return bitmap_->get(value);
+        if (page_refs_[page(value)] > 0)
+            return bitmap_->get(value);
+        return false;
     }
 
-    std::size_t page(std::size_t index) {
+    std::size_t page(std::size_t index) const {
         assert(index < Capacity);
         return index / (PageSize * 8);
     }
@@ -775,7 +779,7 @@ private:
     alignas(64) std::atomic<uint64_t> memory_size_ = 0;
     void* mmap_ = 0;
     void* memory_ = 0;
-    alignas(64) detail::atomic_bitset_heap< uint32_t, PageCount > deallocated_pages_;
+    elastic_atomic_bitset_heap< uint32_t, PageCount, MetadataPageSize > deallocated_pages_;
     std::atomic<uint64_t> deallocated_range_;
 };
 
@@ -967,8 +971,8 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
 
 private:
     page_manager< PageSize, MaxSize > page_manager_;
-    elastic_bitset_heap< uint32_t, PageCount, PageSize > allocated_pages_;
-    descriptor_manager< page_descriptor, PageCount, PageSize > page_descriptors_;
+    elastic_bitset_heap< uint32_t, PageCount, MetadataPageSize > allocated_pages_;
+    descriptor_manager< page_descriptor, PageCount, MetadataPageSize > page_descriptors_;
 };
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > class arena_allocator_base {
