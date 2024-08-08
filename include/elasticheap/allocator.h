@@ -249,7 +249,6 @@ template< typename T, std::size_t Size > struct arena_free_list5 {
             stack_[stack_size_++] = value;
         } else {
             bitmap_.set(value);
-            //bitmap_index_ = value >> 6;
         }
     }
 
@@ -268,12 +267,14 @@ template< typename T, std::size_t Size > struct arena_free_list5 {
     // metadata
     uint32_t stack_size_ = 0;
     uint32_t bitmap_index_ = 0;
-    // std::atomic<std::size_t > atomic_bitmap_index_;
+    uint32_t bitmap_size_ = 0;
+    std::atomic<std::size_t > atomic_bitmap_index_;
+    std::atomic<uint32_t> atomic_bitmap_size_;
 
     // and two pages
-    std::array< uint16_t, 8192 + 4096 > stack_;    // 1st page
+    std::array< uint16_t, 1024 + 512 > stack_;    // 1st page
     detail::bitset< 64 * 256 > bitmap_;     // 2nd page (with atomic portion)
-    //detail::atomic_bitset< 64 * 256 > atomic_bitmap_;
+    detail::atomic_bitset< 64 * 256 > atomic_bitmap_;
 };
 
 struct arena_descriptor_base {
@@ -534,6 +535,8 @@ private:
 };
 
 template< typename T, std::size_t Size, std::size_t PageSize > struct descriptor_manager {
+    static_assert(PageSize > sizeof(T));
+    static_assert(PageSize % sizeof(T) == 0);
     static constexpr std::size_t MmapSize = (sizeof(T) * Size + PageSize - 1) & ~(PageSize - 1);
 
     descriptor_manager()

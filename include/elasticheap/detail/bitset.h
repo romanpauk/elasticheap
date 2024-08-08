@@ -105,7 +105,7 @@ namespace elasticheap::detail {
             for(uint32_t i = 0; i < Size; ++i) {
                 auto j = (i + index) & (Size - 1);
                 if (values_[j]) {
-                    index = j;
+                    index = j + 1;
                     auto count = _tzcnt_u64(values_[j]);
                     values_[j] &= ~(T{1} << count);
                     return count + j * sizeof(T) * 8;
