@@ -659,6 +659,15 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
         std::atomic_thread_fence(std::memory_order_release);
     }
 
+    bool top(std::atomic<uint64_t>& range, T& value) const {
+        auto r = range.load(std::memory_order_acquire);
+        if (r == Capacity) return false;
+
+        auto [max, min] = unpack(r);
+        value = min;
+        return true;
+    }
+
     bool pop(std::atomic<uint64_t>& range, T& value) {
         auto r = range.load(std::memory_order_acquire);
     again:
@@ -710,16 +719,16 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
     }
 
 private:
-    std::size_t page(std::size_t index) const {
+    static std::size_t page(std::size_t index) {
         assert(index < Capacity);
         return index / (PageSize * 8);
     }
 
-    std::tuple< uint32_t, uint32_t > unpack(uint64_t range) {
+    static std::tuple< uint32_t, uint32_t > unpack(uint64_t range) {
         return { range >> 32, range };
     }
 
-    uint64_t pack(uint32_t max, uint32_t min) {
+    static uint64_t pack(uint32_t max, uint32_t min) {
         return ((uint64_t)max << 32) | min;
     }
 
@@ -919,14 +928,14 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
     {}
 
     void* get_allocated_page() {
-        // TODO: need a way to access top page without having to pop and push it
-        // TODO: this will require a way to remove any page
         uint32_t top;
-        while(allocated_pages_.pop(allocated_range_, top)) {
+        while(allocated_pages_.top(allocated_range_, top)) {
             void* page = page_manager_.get_page(top);
-            if (page_manager_.is_page_deallocated(page))
+            if (page_manager_.is_page_deallocated(page)) {
+                allocated_pages_.erase(allocated_range_, top);
                 continue;
-            allocated_pages_.push(allocated_range_, top);
+            }
+
             return page;
         }
 
