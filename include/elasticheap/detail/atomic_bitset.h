@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <cstdint>
@@ -23,13 +24,13 @@ namespace elasticheap::detail {
     };
 
     template<
-        std::size_t Bits, 
+        std::size_t Bits,
         typename T = typename atomic_bitset_type<Bits>::type,
         std::size_t Size = (Bits + sizeof(T) * 8 - 1) / (sizeof(T) * 8)
     > struct atomic_bitset_base {
         static_assert(Size > 1);
         static_assert((Bits & (Bits - 1)) == 0);
-        
+
         using value_type = std::atomic<T>;
         static constexpr std::size_t size() { return Bits; }
 
@@ -53,33 +54,35 @@ namespace elasticheap::detail {
             return values_[index/sizeof(T)/8].load(order) & (T{1} << (index & (sizeof(T) * 8 - 1)));
         }
 
-        /*bool empty() const {
+        bool empty(std::memory_order order = std::memory_order_relaxed) const {
+            std::atomic_thread_fence(order);
             for(std::size_t i = 0; i < Size; ++i)
-                if (values_[i].load(std::memory_order_acquire) != 0) return false;
+                if (values_[i].load(std::memory_order_relaxed) != 0) return false;
             return true;
         }
 
-        bool full() const {
+        bool full(std::memory_order order = std::memory_order_relaxed) const {
+            std::atomic_thread_fence(order);
             for(std::size_t i = 0; i < Size; ++i)
-                if (values_[i].load(std::memory_order_acquire) != std::numeric_limits<T>::max()) return false;            
+                if (values_[i].load(std::memory_order_relaxed) != std::numeric_limits<T>::max()) return false;
             return true;
-        }*/
+        }
 
     private:
-        std::atomic<T> values_[Size];
+        std::array< std::atomic<T>, Size > values_;
     };
-    
+
     template<
-        std::size_t Bits, 
+        std::size_t Bits,
         typename T
     > struct atomic_bitset_base<Bits, T, 1> {
         static_assert((Bits & (Bits - 1)) == 0);
 
         using value_type = std::atomic<T>;
         static constexpr std::size_t size() { return Bits; }
-        
+
         void clear(std::memory_order order = std::memory_order_relaxed) { value_.store(0, order); }
-        
+
         void set(std::size_t index, std::memory_order order = std::memory_order_relaxed) {
             assert(index < Bits);
             value_.fetch_or(T{1} << index, order);
@@ -95,9 +98,14 @@ namespace elasticheap::detail {
             return value_.load(order) & (T{1} << index);
         }
 
-        //bool empty() const { return value_.load(std::memory_order_relaxed) == 0; }
-        //bool full() const { return value_.load(std::memory_order_relaxed) == std::numeric_limits<T>::max(); }
-        
+        bool empty(std::memory_order order = std::memory_order_relaxed) const {
+            return value_.load(order) == T{0};
+        }
+
+        bool full(std::memory_order order = std::memory_order_relaxed) const {
+            return value_.load(order) == std::numeric_limits<T>::max();
+        }
+
     private:
         std::atomic<T> value_;
     };

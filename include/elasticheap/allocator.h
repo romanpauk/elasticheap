@@ -38,7 +38,7 @@
 #define __assume(cond) do { if (!(cond)) __builtin_unreachable(); } while (0)
 #define __likely(cond) __builtin_expect((cond), true)
 #define __unlikely(cond) __builtin_expect((cond), false)
-#define __failure(msg) do { fprintf(stderr, "%s:%d: %s: %s", \
+#define __failure(msg) do { fprintf(stderr, "%s:%d: %s: %s\n", \
     __FILE__, __LINE__, __PRETTY_FUNCTION__, msg); } while(0)
 
 //#define STATS
@@ -576,7 +576,6 @@ private:
     elastic_array< T, Size, PageSize > values_;
 };
 
-#if 1
 template< typename T, std::size_t Capacity, std::size_t PageSize > struct elastic_atomic_bitset_heap {
     static constexpr std::size_t MmapSize = sizeof(detail::atomic_bitset<Capacity>) + PageSize - 1;
     static_assert(Capacity <= std::numeric_limits<uint32_t>::max());
@@ -600,10 +599,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
     }
 
     void push(std::atomic<uint64_t>& range, T value) {
-        auto r = range.load(std::memory_order_acquire);
-
         assert(value < Capacity);
-
         if (page_refs_[page(value)]++ == 0) {
             if (mprotect((uint8_t*)bitmap_ + page(value) * PageSize, PageSize, PROT_READ|PROT_WRITE) == -1)
                 __failure("mprotect");
@@ -612,6 +608,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
         assert(!bitmap_->get(value));
         bitmap_->set(value);
 
+        auto r = range.load(std::memory_order_acquire);
         while(true) {
             auto [max, min] = unpack(r);
             if (max >= value && min <= value) {
@@ -629,6 +626,39 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
         return (uint32_t)range.load(std::memory_order_relaxed) == Capacity;
     }
 
+    void erase(std::atomic<uint64_t>& range, T value) {
+        assert(page_refs_[page(value)] > 0);
+        assert(bitmap_->get(value));
+        bitmap_->clear(value);
+
+        if (--page_refs_[page(value)] == 0) {
+            if (madvise((uint8_t*)bitmap_ + page(value) * PageSize, PageSize, MADV_DONTNEED) == -1)
+                __failure("madvise");
+        }
+
+        // TODO: return;
+        // TODO: range should gets recalculated on next push/pop, but with return above,
+        // it fails...
+        auto r = range.load(std::memory_order_acquire);
+        auto [max, min] = unpack(r);
+        if (min == value) {
+            for (std::size_t i = min + 1; i < max; ++i) {
+                if (get(i)) {
+                    if (range.compare_exchange_strong(r, pack(max, i), std::memory_order_relaxed)) {
+                        return;
+                    }
+                }
+            }
+
+            range.compare_exchange_strong(r, Capacity, std::memory_order_relaxed);
+        } else {
+            // TODO
+            //std::abort();
+        }
+
+        std::atomic_thread_fence(std::memory_order_release);
+    }
+
     bool pop(std::atomic<uint64_t>& range, T& value) {
         auto r = range.load(std::memory_order_acquire);
     again:
@@ -638,7 +668,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
                 if (bitmap_->get(i)) {
                     if (range.compare_exchange_strong(r, pack(max, i + 1), std::memory_order_relaxed)) {
                         bitmap_->clear(i);
-
+                        assert(page_refs_[page(i)] > 0);
                         if (--page_refs_[page(i)] == 0) {
                             if (madvise((uint8_t*)bitmap_ + page(i) * PageSize, PageSize, MADV_DONTNEED) == -1)
                                 __failure("madvise");
@@ -654,6 +684,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
 
             if (range.compare_exchange_strong(r, Capacity, std::memory_order_relaxed)) {
                 bitmap_->clear(min);
+                assert(page_refs_[page(min)] > 0);
                 if (--page_refs_[page(min)] == 0) {
                     if (madvise((uint8_t*)bitmap_ + page(min) * PageSize, PageSize, MADV_DONTNEED) == -1)
                         __failure("madvise");
@@ -694,7 +725,6 @@ private:
     uint8_t* mmap_;
     detail::atomic_bitset<Capacity>* bitmap_;
 };
-#endif
 
 template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
     static constexpr std::size_t MmapSize = MaxSize + PageSize - 1;
@@ -878,7 +908,7 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
     static_assert(SegmentCount <= std::numeric_limits<uint32_t>::max());
 
     struct page_descriptor {
-        detail::bitset<PageSize/SegmentSize> bitmap;
+        detail::atomic_bitset<PageSize/SegmentSize> bitmap;
     };
 
     segment_manager()
@@ -886,12 +916,13 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
     {}
 
     void* get_allocated_page() {
+        // TODO: need a way to access top page without having to pop and push it
+        // TODO: this will require a way to remove any page
         uint32_t top;
         while(allocated_pages_.pop(allocated_pages_range_, top)) {
             void* page = page_manager_.get_page(top);
-            if (page_manager_.is_page_deallocated(page)) {
+            if (page_manager_.is_page_deallocated(page))
                 continue;
-            }
             allocated_pages_.push(allocated_pages_range_, top);
             return page;
         }
@@ -914,12 +945,8 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
             if (!pdesc->bitmap.get(i)) {
                 pdesc->bitmap.set(i);
                 segment = (uint8_t*)page + SegmentSize * i;
-                if (pdesc->bitmap.full()) {
-                    assert(page_manager_.get_page(allocated_pages_.top()) == page);
-                    uint32_t top;
-                    allocated_pages_.pop(allocated_pages_range_, top);
-                }
-
+                if (pdesc->bitmap.full())
+                    allocated_pages_.erase(allocated_pages_range_, page_manager_.get_page_index(page));
                 break;
             }
         }
@@ -954,8 +981,10 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
 
         int index = ((uint8_t*)ptr - (uint8_t*)page)/SegmentSize;
         assert(index < PageSegmentCount);
+        // TODO: need fetch_clear to find out if previous state was full or single 1.
         pdesc->bitmap.clear(index);
         if (pdesc->bitmap.empty()) {
+            allocated_pages_.erase(allocated_pages_range_, page_manager_.get_page_index(page));
             page_manager_.deallocate_page(page);
         }
     }
