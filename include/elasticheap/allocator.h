@@ -881,13 +881,18 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         detail::bitset<PageSize/SegmentSize> bitmap;
     };
 
+    segment_manager()
+        : allocated_pages_(allocated_pages_range_)
+    {}
+
     void* get_allocated_page() {
-        while(!allocated_pages_.empty()) {
-            void* page = page_manager_.get_page(allocated_pages_.top());
+        uint32_t top;
+        while(allocated_pages_.pop(allocated_pages_range_, top)) {
+            void* page = page_manager_.get_page(top);
             if (page_manager_.is_page_deallocated(page)) {
-                allocated_pages_.pop();
                 continue;
             }
+            allocated_pages_.push(allocated_pages_range_, top);
             return page;
         }
 
@@ -895,7 +900,7 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         auto index = page_manager_.get_page_index(page);
         auto* pdesc = page_descriptors_.allocate_descriptor(index);
         pdesc->bitmap.clear();
-        allocated_pages_.push(page_manager_.get_page_index(page));
+        allocated_pages_.push(allocated_pages_range_, page_manager_.get_page_index(page));
         return page;
     }
 
@@ -911,7 +916,8 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
                 segment = (uint8_t*)page + SegmentSize * i;
                 if (pdesc->bitmap.full()) {
                     assert(page_manager_.get_page(allocated_pages_.top()) == page);
-                    allocated_pages_.pop();
+                    uint32_t top;
+                    allocated_pages_.pop(allocated_pages_range_, top);
                 }
 
                 break;
@@ -944,7 +950,7 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         auto* pdesc = page_descriptors_.get_descriptor(page_manager_.get_page_index(page));
 
         if (pdesc->bitmap.full())
-            allocated_pages_.push(page_manager_.get_page_index(page));
+            allocated_pages_.push(allocated_pages_range_, page_manager_.get_page_index(page));
 
         int index = ((uint8_t*)ptr - (uint8_t*)page)/SegmentSize;
         assert(index < PageSegmentCount);
@@ -974,7 +980,8 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
 
 private:
     page_manager< PageSize, MaxSize > page_manager_;
-    elastic_bitset_heap< uint32_t, PageCount, MetadataPageSize > allocated_pages_;
+    elastic_atomic_bitset_heap< uint32_t, PageCount, MetadataPageSize > allocated_pages_;
+    std::atomic<uint64_t> allocated_pages_range_;
     descriptor_manager< page_descriptor, PageCount, MetadataPageSize > page_descriptors_;
 };
 
