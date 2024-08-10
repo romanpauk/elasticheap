@@ -644,7 +644,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
         if (min == value) {
             for (std::size_t i = min + 1; i < max; ++i) {
                 if (get(i)) {
-                    if (range.compare_exchange_strong(r, pack(max, i), std::memory_order_relaxed)) {
+                    if (range.compare_exchange_strong(r, pack(max, i), std::memory_order_release)) {
                         return;
                     }
                 }
@@ -664,8 +664,9 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
     again:
         auto [max, min] = unpack(range);
         if (min < Capacity) {
+            // TODO: this is stupid, should iterate words
             for(std::size_t i = min; i < max; ++i) {
-                if (bitmap_->get(i)) {
+                if (get(i)) {
                     if (range.compare_exchange_strong(r, pack(max, i + 1), std::memory_order_relaxed)) {
                         bitmap_->clear(i);
                         assert(page_refs_[page(i)] > 0);
@@ -675,6 +676,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
                         }
 
                         value = i;
+                        std::atomic_thread_fence(std::memory_order_release);
                         return true;
                     }
 
@@ -691,6 +693,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
                 }
 
                 value = min;
+                std::atomic_thread_fence(std::memory_order_release);
                 return true;
             } else {
                 goto again;
@@ -706,12 +709,12 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
         return false;
     }
 
+private:
     std::size_t page(std::size_t index) const {
         assert(index < Capacity);
         return index / (PageSize * 8);
     }
 
-private:
     std::tuple< uint32_t, uint32_t > unpack(uint64_t range) {
         return { range >> 32, range };
     }
@@ -912,18 +915,18 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
     };
 
     segment_manager()
-        : allocated_pages_(allocated_pages_range_)
+        : allocated_pages_(allocated_range_)
     {}
 
     void* get_allocated_page() {
         // TODO: need a way to access top page without having to pop and push it
         // TODO: this will require a way to remove any page
         uint32_t top;
-        while(allocated_pages_.pop(allocated_pages_range_, top)) {
+        while(allocated_pages_.pop(allocated_range_, top)) {
             void* page = page_manager_.get_page(top);
             if (page_manager_.is_page_deallocated(page))
                 continue;
-            allocated_pages_.push(allocated_pages_range_, top);
+            allocated_pages_.push(allocated_range_, top);
             return page;
         }
 
@@ -931,7 +934,7 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         auto index = page_manager_.get_page_index(page);
         auto* pdesc = page_descriptors_.allocate_descriptor(index);
         pdesc->bitmap.clear();
-        allocated_pages_.push(allocated_pages_range_, page_manager_.get_page_index(page));
+        allocated_pages_.push(allocated_range_, page_manager_.get_page_index(page));
         return page;
     }
 
@@ -946,7 +949,7 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
                 pdesc->bitmap.set(i);
                 segment = (uint8_t*)page + SegmentSize * i;
                 if (pdesc->bitmap.full())
-                    allocated_pages_.erase(allocated_pages_range_, page_manager_.get_page_index(page));
+                    allocated_pages_.erase(allocated_range_, page_manager_.get_page_index(page));
                 break;
             }
         }
@@ -977,14 +980,14 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         auto* pdesc = page_descriptors_.get_descriptor(page_manager_.get_page_index(page));
 
         if (pdesc->bitmap.full())
-            allocated_pages_.push(allocated_pages_range_, page_manager_.get_page_index(page));
+            allocated_pages_.push(allocated_range_, page_manager_.get_page_index(page));
 
         int index = ((uint8_t*)ptr - (uint8_t*)page)/SegmentSize;
         assert(index < PageSegmentCount);
         // TODO: need fetch_clear to find out if previous state was full or single 1.
         pdesc->bitmap.clear(index);
         if (pdesc->bitmap.empty()) {
-            allocated_pages_.erase(allocated_pages_range_, page_manager_.get_page_index(page));
+            allocated_pages_.erase(allocated_range_, page_manager_.get_page_index(page));
             page_manager_.deallocate_page(page);
         }
     }
@@ -1010,7 +1013,7 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
 private:
     page_manager< PageSize, MaxSize > page_manager_;
     elastic_atomic_bitset_heap< uint32_t, PageCount, MetadataPageSize > allocated_pages_;
-    std::atomic<uint64_t> allocated_pages_range_;
+    std::atomic<uint64_t> allocated_range_;
     descriptor_manager< page_descriptor, PageCount, MetadataPageSize > page_descriptors_;
 };
 

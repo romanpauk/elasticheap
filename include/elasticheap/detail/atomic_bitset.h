@@ -36,7 +36,8 @@ namespace elasticheap::detail {
 
         void clear(std::memory_order order = std::memory_order_relaxed) {
             for(std::size_t i = 0; i < Size; ++i)
-                values_[i].store(0, order);
+                values_[i].store(0, std::memory_order_relaxed);
+            std::atomic_thread_fence(order);
         }
 
         void set(std::size_t index, std::memory_order order = std::memory_order_relaxed) {
