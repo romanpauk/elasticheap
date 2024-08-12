@@ -636,9 +636,10 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
                 __failure("madvise");
         }
 
-        // TODO: return;
-        // TODO: range should gets recalculated on next push/pop, but with return above,
-        // it fails...
+        // TODO: recalculate the range
+        std::atomic_thread_fence(std::memory_order_release);
+        return;
+
         auto r = range.load(std::memory_order_acquire);
         auto [max, min] = unpack(r);
         if (min == value) {
@@ -664,8 +665,14 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
         if (r == Capacity) return false;
 
         auto [max, min] = unpack(r);
-        value = min;
-        return true;
+        // TODO: range can be stale due to erase()
+        for (std::size_t index = min; index <= max; ++index) {
+            if (get(index)) {
+                value = index;
+                return true;
+            }
+        }
+        return false;
     }
 
     bool pop(std::atomic<uint64_t>& range, T& value) {
