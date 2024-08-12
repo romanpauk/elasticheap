@@ -81,17 +81,18 @@ namespace elasticheap::detail {
 
         using value_type = std::atomic<T>;
         static constexpr std::size_t size() { return Bits; }
+        static constexpr T full_value() { return std::numeric_limits<T>::max(); }
 
         void clear(std::memory_order order = std::memory_order_relaxed) { value_.store(0, order); }
 
-        void set(std::size_t index, std::memory_order order = std::memory_order_relaxed) {
+        T set(std::size_t index, std::memory_order order = std::memory_order_relaxed) {
             assert(index < Bits);
-            value_.fetch_or(T{1} << index, order);
+            return value_.fetch_or(T{1} << index, order);
         }
 
-        void clear(std::size_t index, std::memory_order order = std::memory_order_relaxed) {
+        T clear(std::size_t index, std::memory_order order = std::memory_order_relaxed) {
             assert(index < Bits);
-            value_.fetch_and(~(T{1} << index), order);
+            return value_.fetch_and(~(T{1} << index), order);
         }
 
         bool get(std::size_t index, std::memory_order order = std::memory_order_relaxed) const {
@@ -104,7 +105,11 @@ namespace elasticheap::detail {
         }
 
         bool full(std::memory_order order = std::memory_order_relaxed) const {
-            return value_.load(order) == std::numeric_limits<T>::max();
+            return value_.load(order) == full_value();
+        }
+
+        static std::size_t popcount(T value) {
+            return _mm_popcnt_u64(value);
         }
 
     private:

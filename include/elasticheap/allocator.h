@@ -962,9 +962,9 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         void* segment = 0;
         for (size_t i = 0; i < PageSegmentCount; ++i) {
             if (!pdesc->bitmap.get(i)) {
-                pdesc->bitmap.set(i);
+                auto word = pdesc->bitmap.set(i);
                 segment = (uint8_t*)page + SegmentSize * i;
-                if (pdesc->bitmap.full())
+                if (pdesc->bitmap.popcount(word) + 1 == pdesc->bitmap.size())
                     allocated_pages_.erase(allocated_range_, page_manager_.get_page_index(page));
                 break;
             }
@@ -995,16 +995,14 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         void* page = page_manager_.get_page(ptr);
         auto* pdesc = page_descriptors_.get_descriptor(page_manager_.get_page_index(page));
 
-        if (pdesc->bitmap.full())
-            allocated_pages_.push(allocated_range_, page_manager_.get_page_index(page));
-
         int index = ((uint8_t*)ptr - (uint8_t*)page)/SegmentSize;
         assert(index < PageSegmentCount);
-        // TODO: need fetch_clear to find out if previous state was full or single 1.
-        pdesc->bitmap.clear(index);
-        if (pdesc->bitmap.empty()) {
+        auto word = pdesc->bitmap.clear(index);
+        if (word == 1) {
             allocated_pages_.erase(allocated_range_, page_manager_.get_page_index(page));
             page_manager_.deallocate_page(page);
+        } else if (word == pdesc->bitmap.full_value()) {
+            allocated_pages_.push(allocated_range_, page_manager_.get_page_index(page));
         }
     }
 
