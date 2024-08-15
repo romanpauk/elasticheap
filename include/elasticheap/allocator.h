@@ -936,10 +936,9 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
 
     void* get_allocated_page() {
         uint32_t top;
-        while(allocated_pages_.top(allocated_range_, top)) {
+        while(allocated_pages_.pop(allocated_range_, top)) {
             void* page = page_manager_.get_page(top);
             if (page_manager_.is_page_deallocated(page)) {
-                allocated_pages_.erase(allocated_range_, top);
                 continue;
             }
 
@@ -950,7 +949,6 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         auto index = page_manager_.get_page_index(page);
         auto* pdesc = page_descriptors_.allocate_descriptor(index);
         pdesc->bitmap.clear();
-        allocated_pages_.push(allocated_range_, page_manager_.get_page_index(page));
         return page;
     }
 
@@ -964,8 +962,8 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
             if (!pdesc->bitmap.get(i)) {
                 auto word = pdesc->bitmap.set(i);
                 segment = (uint8_t*)page + SegmentSize * i;
-                if (pdesc->bitmap.popcount(word) + 1 == pdesc->bitmap.size())
-                    allocated_pages_.erase(allocated_range_, page_manager_.get_page_index(page));
+                if (pdesc->bitmap.popcount(word) + 1 != pdesc->bitmap.size())
+                    allocated_pages_.push(allocated_range_, page_manager_.get_page_index(page));
                 break;
             }
         }
@@ -995,13 +993,14 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         void* page = page_manager_.get_page(ptr);
         auto* pdesc = page_descriptors_.get_descriptor(page_manager_.get_page_index(page));
 
+        allocated_pages_.erase(allocated_range_, page_manager_.get_page_index(page));
+
         int index = ((uint8_t*)ptr - (uint8_t*)page)/SegmentSize;
         assert(index < PageSegmentCount);
         auto word = pdesc->bitmap.clear(index);
         if (word == 1) {
-            allocated_pages_.erase(allocated_range_, page_manager_.get_page_index(page));
             page_manager_.deallocate_page(page);
-        } else if (word == pdesc->bitmap.full_value()) {
+        } else {
             allocated_pages_.push(allocated_range_, page_manager_.get_page_index(page));
         }
     }
