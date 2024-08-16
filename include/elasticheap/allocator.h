@@ -1001,11 +1001,12 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         int index = ((uint8_t*)ptr - (uint8_t*)page)/SegmentSize;
         assert(index < PageSegmentCount);
         auto word = pdesc->bitmap.clear(index);
-        if (word == 1) {
-            //if (erased)
+        if (erased) {
+            if (word == 1) {
                 page_manager_.deallocate_page(page);
-        } else {
-            allocated_pages_.push(allocated_range_, page_manager_.get_page_index(page));
+            } else {
+                allocated_pages_.push(allocated_range_, page_manager_.get_page_index(page));
+            }
         }
     }
 
