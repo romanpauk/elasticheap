@@ -42,7 +42,7 @@
     __FILE__, __LINE__, __PRETTY_FUNCTION__, msg); } while(0)
 
 //#define STATS
-//#define THREADS
+#define THREADS
 #define MAGIC
 
 namespace elasticheap {
@@ -626,10 +626,11 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
         return (uint32_t)range.load(std::memory_order_relaxed) == Capacity;
     }
 
-    void erase(std::atomic<uint64_t>& range, T value) {
-        assert(page_refs_[page(value)] > 0);
-        assert(bitmap_->get(value));
-        bitmap_->clear(value);
+    bool erase(std::atomic<uint64_t>& range, T value) {
+        if (!bitmap_->get(value))
+            return false;
+
+        bool cleared = bitmap_->clear(value);
 
         if (--page_refs_[page(value)] == 0) {
             if (madvise((uint8_t*)bitmap_ + page(value) * PageSize, PageSize, MADV_DONTNEED) == -1)
@@ -637,8 +638,9 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
         }
 
         // TODO: recalculate the range
+        // Note that there is an use-case of erase/push that does not modify the range
         std::atomic_thread_fence(std::memory_order_release);
-        return;
+        return cleared;
 
         auto r = range.load(std::memory_order_acquire);
         auto [max, min] = unpack(r);
@@ -646,7 +648,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
             for (std::size_t i = min + 1; i < max; ++i) {
                 if (get(i)) {
                     if (range.compare_exchange_strong(r, pack(max, i), std::memory_order_release)) {
-                        return;
+                        return cleared;
                     }
                 }
             }
@@ -658,6 +660,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
         }
 
         std::atomic_thread_fence(std::memory_order_release);
+        return cleared;
     }
 
     bool top(std::atomic<uint64_t>& range, T& value) const {
@@ -993,13 +996,14 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         void* page = page_manager_.get_page(ptr);
         auto* pdesc = page_descriptors_.get_descriptor(page_manager_.get_page_index(page));
 
-        allocated_pages_.erase(allocated_range_, page_manager_.get_page_index(page));
+        bool erased = allocated_pages_.erase(allocated_range_, page_manager_.get_page_index(page));
 
         int index = ((uint8_t*)ptr - (uint8_t*)page)/SegmentSize;
         assert(index < PageSegmentCount);
         auto word = pdesc->bitmap.clear(index);
         if (word == 1) {
-            page_manager_.deallocate_page(page);
+            //if (erased)
+                page_manager_.deallocate_page(page);
         } else {
             allocated_pages_.push(allocated_range_, page_manager_.get_page_index(page));
         }
@@ -1082,6 +1086,7 @@ protected:
     template< size_t SizeClass > void* allocate_impl() {
     again:
         auto* desc = get_cached_descriptor<SizeClass>();
+        // TODO: use empty() with thread-local fastpath
         if (__likely(desc->size() < desc->capacity()))
             return desc->allocate();
 
@@ -1169,8 +1174,8 @@ protected:
         if (!segment_manager_.is_page_deallocated(page)) {
             auto& pdesc = segment_manager_.get_page_descriptor(page);
             int pindex = ((uint8_t*)segment - (uint8_t*)page)/ArenaSize;
-            // TODO: for MT, there needs ot be a thread ownership check
-            return pdesc.bitmap.get(pindex) && desc->size_class_ == SizeClass;
+
+            return pdesc.bitmap.get(pindex) && desc->size_class_ == SizeClass && desc->tid_ == thread_id();
         }
         return false;
     }

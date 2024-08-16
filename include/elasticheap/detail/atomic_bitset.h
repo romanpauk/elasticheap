@@ -45,9 +45,10 @@ namespace elasticheap::detail {
             values_[index/sizeof(T)/8].fetch_or(T{1} << (index & (sizeof(T) * 8 - 1)), order);
         }
 
-        void clear(std::size_t index, std::memory_order order = std::memory_order_relaxed) {
+        bool clear(std::size_t index, std::memory_order order = std::memory_order_relaxed) {
             assert(index < Bits);
-            values_[index/sizeof(T)/8].fetch_and(~(T{1} << (index & (sizeof(T) * 8 - 1))), order);
+            return values_[index/sizeof(T)/8].fetch_and(~(T{1} << (index & (sizeof(T) * 8 - 1))), order) &
+                (T{1} << (index & (sizeof(T) * 8 - 1)));
         }
 
         bool get(std::size_t index, std::memory_order order = std::memory_order_relaxed) const {
