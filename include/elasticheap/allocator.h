@@ -329,8 +329,7 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
         assert(magic_ == 0xDEADBEEF);
     #endif
     #if defined(THREADS)
-        if (tid_ != thread_id())
-            std::abort();
+        assert(tid_ == thread_id());
     #endif
         assert(size_class_ == SizeClass);
         assert(is_ptr_valid(ptr));
@@ -1087,7 +1086,16 @@ protected:
     template< size_t SizeClass > void* allocate_impl() {
     again:
         auto* desc = get_cached_descriptor<SizeClass>();
-        // TODO: use empty() with thread-local fastpath
+        /*
+        if (__likely(!desc->empty_local()) {
+            return desc->allocate_local();
+        }
+
+        if (__likely(!desc->empty_global()) {
+            return desc->allocate_global();
+        }
+        */
+
         if (__likely(desc->size() < desc->capacity()))
             return desc->allocate();
 
@@ -1099,6 +1107,17 @@ protected:
 
     template< size_t SizeClass > void deallocate_impl(void* ptr) noexcept {
         auto* desc = get_descriptor<SizeClass>(ptr);
+        /*
+        if (__likely(desc->thread_id() == thread_id())) {
+            desc->deallocate_local(ptr);
+            if (__unlikely(desc->size_local() == 0)) {
+            }
+        } else {
+            desc->deallocate_global(ptr);
+        }
+        */
+
+        // TODO: cache heap is not MT-safe yet
         desc->deallocate(ptr);
         if(__unlikely(desc->size() == 0)) {
             deallocate_descriptor<SizeClass>(desc);
