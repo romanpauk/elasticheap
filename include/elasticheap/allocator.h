@@ -433,6 +433,7 @@ private:
 
 template< typename T, std::size_t Size, typename Compare = std::greater<> > struct elastic_heap {
     void push(T value) {
+        assert(std::find(values_.begin(), values_.end(), value) == values_.end());
         values_.emplace_back(value);
         std::push_heap(values_.begin(), values_.end(), Compare{});
     }
@@ -903,9 +904,16 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
     std::size_t size() const { return size_; }
     static constexpr std::size_t capacity() { return Capacity; }
 
-    std::size_t page(std::size_t index) {
+    static std::size_t page(std::size_t index) {
         assert(index < Capacity);
         return index / (PageSize * 8);
+    }
+
+    bool get(std::size_t index) const {
+        if (page_refs_[page(index)] > 0) {
+            return bitmap_->get(index);
+        }
+        return false;
     }
 
 private:
@@ -1184,7 +1192,9 @@ protected:
     template< size_t SizeClass > void push_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
         (void)desc;
         auto size = size_class_offset(SizeClass);
-        size_classes_[size].push(descriptor_manager_.get_descriptor_index(desc));
+        // TODO: a case where descriptor is in a heap, but we cross the size - 1
+        if (!size_classes_[size].get(descriptor_manager_.get_descriptor_index(desc)))
+            size_classes_[size].push(descriptor_manager_.get_descriptor_index(desc));
     }
 
     template< std::size_t SizeClass > bool validate_descriptor_state(arena_descriptor<ArenaSize, SizeClass>* desc) {
@@ -1203,7 +1213,7 @@ protected:
     // TOOD: use some more separated global/local state
     static segment_manager<PageSize, ArenaSize, MaxSize> segment_manager_;
     static descriptor_manager<std::array<uint8_t, DescriptorSize >, MaxSize / ArenaSize, PageSize> descriptor_manager_;
-    static std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> size_classes_;
+    static std::array<elastic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> size_classes_;
     static std::array<arena_descriptor_base*, 23> size_class_cache_;
 };
 
@@ -1211,7 +1221,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> segm
 
 template < std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> descriptor_manager<std::array<uint8_t, DescriptorSize>, MaxSize / ArenaSize, PageSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::descriptor_manager_;
 
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_classes_;
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<elastic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_classes_;
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<arena_descriptor_base*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_class_cache_;
 
