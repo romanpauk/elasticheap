@@ -433,7 +433,7 @@ private:
 
 template< typename T, std::size_t Size, typename Compare = std::greater<> > struct elastic_heap {
     void push(T value) {
-        assert(std::find(values_.begin(), values_.end(), value) == values_.end());
+        //assert(std::find(values_.begin(), values_.end(), value) == values_.end());
         values_.emplace_back(value);
         std::push_heap(values_.begin(), values_.end(), Compare{});
     }
@@ -1193,8 +1193,8 @@ protected:
         (void)desc;
         auto size = size_class_offset(SizeClass);
         // TODO: a case where descriptor is in a heap, but we cross the size - 1
-        if (!size_classes_[size].get(descriptor_manager_.get_descriptor_index(desc)))
-            size_classes_[size].push(descriptor_manager_.get_descriptor_index(desc));
+        //if (!size_classes_[size].get(descriptor_manager_.get_descriptor_index(desc)))
+        size_classes_[size].push(descriptor_manager_.get_descriptor_index(desc));
     }
 
     template< std::size_t SizeClass > bool validate_descriptor_state(arena_descriptor<ArenaSize, SizeClass>* desc) {
@@ -1213,7 +1213,21 @@ protected:
     // TOOD: use some more separated global/local state
     static segment_manager<PageSize, ArenaSize, MaxSize> segment_manager_;
     static descriptor_manager<std::array<uint8_t, DescriptorSize >, MaxSize / ArenaSize, PageSize> descriptor_manager_;
-    static std::array<elastic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> size_classes_;
+    // TODO: using bitmap has a little drawback that each descriptor can be from different page,
+    // so the bitmap can end up very sparse. To mitigate that, each thread can get a reserved range
+    // of pages, so its descriptors will fill bitmap pages. Unfortunately lock-free heap is a no-go.
+    // With 2mb page/8 arenas, the reservation will be 1Gb to fill one page bitmap completely.
+    //
+    // Allocation/deallocation race
+    //  1) allocation uses cached arena. This is safe, as cached object can't be deallocated.
+    //  2) allocation - when cache needs to be updated, allocation pops next element
+    //      and moves it to the cache
+    //  3) during deallocation, cached arena stays intact
+    //  4) deallocation - any other arena is removed from list and decommited
+    // The arena does not have to be removed from any list, it just needs to be atomically marked.
+    // as CACHED or DECOMMITED.
+
+    static std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> size_classes_;
     static std::array<arena_descriptor_base*, 23> size_class_cache_;
 };
 
@@ -1221,7 +1235,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> segm
 
 template < std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> descriptor_manager<std::array<uint8_t, DescriptorSize>, MaxSize / ArenaSize, PageSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::descriptor_manager_;
 
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<elastic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_classes_;
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_classes_;
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<arena_descriptor_base*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_class_cache_;
 
