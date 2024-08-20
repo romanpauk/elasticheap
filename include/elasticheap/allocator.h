@@ -1009,11 +1009,16 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         assert(index < PageSegmentCount);
         auto word = pdesc->bitmap.clear(index);
         if (erased) {
-            if (word == 1) {
+            if (pdesc->bitmap.popcount(word) == 1) {
                 page_manager_.deallocate_page(page);
             } else {
                 allocated_pages_.push(allocated_range_, page_manager_.get_page_index(page));
             }
+        } else {
+            // TODO: revisit full_value and popcounts for larger bitmaps
+            static_assert(pdesc->bitmap.size() <= 64);
+            if (pdesc->bitmap.popcount(word) == pdesc->bitmap.size())
+                allocated_pages_.push(allocated_range_, page_manager_.get_page_index(page));
         }
     }
 
