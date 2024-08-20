@@ -1036,10 +1036,13 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
     }
 
 private:
+    // Global
     page_manager< PageSize, MaxSize > page_manager_;
+    descriptor_manager< page_descriptor, PageCount, MetadataPageSize > page_descriptors_;
+
+    // Local, but could also be Global.
     elastic_atomic_bitset_heap< uint32_t, PageCount, MetadataPageSize > allocated_pages_;
     std::atomic<uint64_t> allocated_range_;
-    descriptor_manager< page_descriptor, PageCount, MetadataPageSize > page_descriptors_;
 };
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > class arena_allocator_base {
@@ -1211,7 +1214,13 @@ protected:
     }
 
     // TOOD: use some more separated global/local state
+    // Global       - shared
+    // Local        - thread-local or cpu-local
+    // Thread-local - thread-local
+    //
+
     static segment_manager<PageSize, ArenaSize, MaxSize> segment_manager_;
+    // Global
     static descriptor_manager<std::array<uint8_t, DescriptorSize >, MaxSize / ArenaSize, PageSize> descriptor_manager_;
     // TODO: using bitmap has a little drawback that each descriptor can be from different page,
     // so the bitmap can end up very sparse. To mitigate that, each thread can get a reserved range
@@ -1227,7 +1236,13 @@ protected:
     // The arena does not have to be removed from any list, it just needs to be atomically marked.
     // as CACHED or DECOMMITED.
 
+    // Using elastic_heap is simpler and also a bit faster (and needs more space), yet
+    // it will never be lock-free.
+
+    // Local
     static std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> size_classes_;
+
+    // Thread-local
     static std::array<arena_descriptor_base*, 23> size_class_cache_;
 };
 
