@@ -684,7 +684,8 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
         auto [max, min] = unpack(range);
         if (min < Capacity) {
             // TODO: this is stupid, should iterate words
-            for(std::size_t i = min; i < max; ++i) {
+            std::size_t i = min;
+            for(; i < max; ++i) {
                 if (get(i)) {
                     if (range.compare_exchange_strong(r, pack(max, i + 1), std::memory_order_relaxed)) {
                         bitmap_->clear(i);
@@ -704,16 +705,21 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
             }
 
             if (range.compare_exchange_strong(r, Capacity, std::memory_order_relaxed)) {
-                bitmap_->clear(min);
-                assert(page_refs_[page(min)] > 0);
-                if (--page_refs_[page(min)] == 0) {
-                    if (madvise((uint8_t*)bitmap_ + page(min) * PageSize, PageSize, MADV_DONTNEED) == -1)
-                        __failure("madvise");
+                assert(i == max);
+                if (get(i)) {
+                    bitmap_->clear(i);
+
+                    if (--page_refs_[page(i)] == 0) {
+                        if (madvise((uint8_t*)bitmap_ + page(i) * PageSize, PageSize, MADV_DONTNEED) == -1)
+                            __failure("madvise");
+                    }
+
+                    value = i;
+                    std::atomic_thread_fence(std::memory_order_release);
+                    return true;
                 }
 
-                value = min;
                 std::atomic_thread_fence(std::memory_order_release);
-                return true;
             } else {
                 goto again;
             }
