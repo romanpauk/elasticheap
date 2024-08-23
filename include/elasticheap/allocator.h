@@ -623,7 +623,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
         }
     }
 
-    bool empty(std::atomic<uint64_t>& range) const {
+    bool empty(const std::atomic<uint64_t>& range) const {
         return (uint32_t)range.load(std::memory_order_relaxed) == Capacity;
     }
 
@@ -664,7 +664,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
         return cleared;
     }
 
-    bool top(std::atomic<uint64_t>& range, T& value) const {
+    bool top(const std::atomic<uint64_t>& range, T& value) const {
         auto r = range.load(std::memory_order_acquire);
         if (r == Capacity) return false;
 
