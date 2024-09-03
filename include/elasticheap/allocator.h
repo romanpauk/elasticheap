@@ -47,6 +47,7 @@
 
 //#define ALLOCATOR_ELASTIC_HEAP
 #define ALLOCATOR_ELASTIC_BITSET_HEAP
+//#define ALLOCATOR_ELASTIC_ATOMIC_BITSET_HEAP
 
 namespace elasticheap {
     static constexpr std::size_t MetadataPageSize = 4096;
@@ -1156,6 +1157,7 @@ protected:
     template< size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* reset_cached_descriptor() {
         auto size = size_class_offset(SizeClass);
     again:
+    #if !defined(ALLOCATOR_ELASTIC_ATOMIC_BITSET_HEAP)
         while(!size_classes_[size].empty()) {
             auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_descriptor(size_classes_[size].top());
             if ((validate_descriptor_state< SizeClass >(desc) && desc->size() != desc->capacity())) {
@@ -1167,7 +1169,22 @@ protected:
                     goto again;
             }
         }
-
+    #else
+        while(!size_classes_[size].empty(size_ranges_[size])) {
+            uint32_t val;
+            if (size_classes_[size].top(size_ranges_[size], val)) {
+                auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_descriptor(val);
+                if ((validate_descriptor_state< SizeClass >(desc) && desc->size() != desc->capacity())) {
+                    size_class_cache_[size] = desc;
+                    return desc;
+                } else {
+                    pop_descriptor<SizeClass>();
+                    if(!size_classes_[size].empty(size_ranges_[size]))
+                        goto again;
+                }
+            }
+        }
+    #endif
         auto* desc = allocate_descriptor<SizeClass>();
         assert(desc->size() == 0);
         size_class_cache_[size] = desc;
@@ -1190,15 +1207,30 @@ protected:
 
     template< size_t SizeClass > void deallocate_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
         auto size = size_class_offset(SizeClass);
+    #if !defined(ALLOCATOR_ELASTIC_ATOMIC_BITSET_HEAP)
         if (size_classes_[size].top() != descriptor_manager_.get_descriptor_index(desc)) {
             segment_manager_.deallocate_segment(desc->begin());
             descriptor_manager_.deallocate_descriptor(desc);
         }
+    #else
+        uint32_t val;
+        if (size_classes_[size].top(size_ranges_[size], val)) {
+            if (val != descriptor_manager_.get_descriptor_index(desc)) {
+                segment_manager_.deallocate_segment(desc->begin());
+                descriptor_manager_.deallocate_descriptor(desc);
+            }
+        }
+    #endif
     }
 
     template< size_t SizeClass > void pop_descriptor() {
         auto size = size_class_offset(SizeClass);
+    #if !defined(ALLOCATOR_ELASTIC_ATOMIC_BITSET_HEAP)
         size_classes_[size].pop();
+    #else
+        uint32_t val;
+        size_classes_[size].pop(val);
+    #endif
     }
 
     template< size_t SizeClass > void push_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
@@ -1257,6 +1289,10 @@ protected:
 #if defined(ALLOCATOR_ELASTIC_BITSET_HEAP)
     static std::array<elastic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> size_classes_;
 #endif
+#if defined(ALLOCATOR_ELASTIC_ATOMIC_BITSET_HEAP)
+    static std::array<elastic_atomic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> size_classes_;
+    static std::array<std::atomic<uint64_t>, 23> size_ranges_;
+#endif
     // Thread-local
     static std::array<arena_descriptor_base*, 23> size_class_cache_;
 };
@@ -1270,6 +1306,10 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std:
 #endif
 #if defined(ALLOCATOR_ELASTIC_BITSET_HEAP)
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<elastic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_classes_;
+#endif
+#if defined(ALLOCATOR_ELASTIC_ATOMIC_BITSET_HEAP)
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<elastic_atomic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_classes_;
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<std::atomic<uint64_t>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_ranges_ = { elastic_atomic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>::capacity() };
 #endif
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<arena_descriptor_base*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_class_cache_;
