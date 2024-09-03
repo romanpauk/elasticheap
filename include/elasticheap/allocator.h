@@ -44,7 +44,9 @@
 //#define STATS
 #define THREADS
 #define MAGIC
-#define ELASTIC_BITSET_HEAP
+
+//#define ALLOCATOR_ELASTIC_HEAP
+#define ALLOCATOR_ELASTIC_BITSET_HEAP
 
 namespace elasticheap {
     static constexpr std::size_t MetadataPageSize = 4096;
@@ -1203,7 +1205,7 @@ protected:
         (void)desc;
         auto size = size_class_offset(SizeClass);
         // TODO: a case where descriptor is in a heap, but we cross the size - 1
-    #if defined(ELASTIC_BITSET_HEAP)
+    #if defined(ALLOCATOR_ELASTIC_BITSET_HEAP)
         if (!size_classes_[size].get(descriptor_manager_.get_descriptor_index(desc)))
     #endif
         size_classes_[size].push(descriptor_manager_.get_descriptor_index(desc));
@@ -1249,9 +1251,10 @@ protected:
     // it will never be lock-free.
 
     // Local
-#if !defined(ELASTIC_BITSET_HEAP)
+#if defined(ALLOCATOR_ELASTIC_HEAP)
     static std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> size_classes_;
-#else
+#endif
+#if defined(ALLOCATOR_ELASTIC_BITSET_HEAP)
     static std::array<elastic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> size_classes_;
 #endif
     // Thread-local
@@ -1262,9 +1265,10 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> segm
 
 template < std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> descriptor_manager<std::array<uint8_t, DescriptorSize>, MaxSize / ArenaSize, PageSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::descriptor_manager_;
 
-#if !defined(ELASTIC_BITSET_HEAP)
+#if defined(ALLOCATOR_ELASTIC_HEAP)
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<elastic_heap<uint32_t, MaxSize/ArenaSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_classes_;
-#else
+#endif
+#if defined(ALLOCATOR_ELASTIC_BITSET_HEAP)
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<elastic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_classes_;
 #endif
 
