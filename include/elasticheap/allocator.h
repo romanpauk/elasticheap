@@ -1160,9 +1160,9 @@ protected:
     template< size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* reset_cached_descriptor() {
         auto size = size_class_offset(SizeClass);
     again:
-        uint32_t val;
-        while(size_classes_[size].pop(val)) {
-            auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_descriptor(val);
+        uint32_t index;
+        while(size_classes_[size].pop(index)) {
+            auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_descriptor(index);
             if ((validate_descriptor_state< SizeClass >(desc) && desc->size() != desc->capacity())) {
                 size_class_cache_[size] = desc;
                 return desc;
