@@ -46,8 +46,8 @@
 #define MAGIC
 
 //#define ALLOCATOR_ELASTIC_HEAP
-//#define ALLOCATOR_ELASTIC_BITSET_HEAP
-#define ALLOCATOR_ELASTIC_ATOMIC_BITSET_HEAP
+#define ALLOCATOR_ELASTIC_BITSET_HEAP
+//#define ALLOCATOR_ELASTIC_ATOMIC_BITSET_HEAP
 
 namespace elasticheap {
     static constexpr std::size_t MetadataPageSize = 4096;
