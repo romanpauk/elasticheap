@@ -46,8 +46,8 @@
 #define MAGIC
 
 //#define ALLOCATOR_ELASTIC_HEAP
-#define ALLOCATOR_ELASTIC_BITSET_HEAP
-//#define ALLOCATOR_ELASTIC_ATOMIC_BITSET_HEAP
+//#define ALLOCATOR_ELASTIC_BITSET_HEAP
+#define ALLOCATOR_ELASTIC_ATOMIC_BITSET_HEAP
 
 namespace elasticheap {
     static constexpr std::size_t MetadataPageSize = 4096;
@@ -626,8 +626,8 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
         }
     }
 
-    bool empty(const std::atomic<uint64_t>& range) const {
-        return (uint32_t)range.load(std::memory_order_relaxed) == Capacity;
+    bool empty() const {
+        return (uint32_t)range_.load(std::memory_order_relaxed) == Capacity;
     }
 
     bool erase(T value) {
@@ -667,8 +667,8 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
         return cleared;
     }
 
-    bool top(const std::atomic<uint64_t>& range, T& value) const {
-        auto r = range.load(std::memory_order_acquire);
+    bool top(T& value) const {
+        auto r = range_.load(std::memory_order_acquire);
         if (r == Capacity) return false;
 
         auto [max, min] = unpack(r);
@@ -1121,7 +1121,9 @@ protected:
             return desc->allocate();
 
         assert(desc->size() == desc->capacity());
+    #if !defined(ALLOCATOR_ELASTIC_ATOMIC_BITSET_HEAP)
         pop_descriptor<SizeClass>();
+    #endif
         reset_cached_descriptor<SizeClass>();
         goto again;
     }
@@ -1150,7 +1152,9 @@ protected:
 
     template< size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* get_cached_descriptor() {
         auto size = size_class_offset(SizeClass);
+    #if !defined(ALLOCATOR_ELASTIC_ATOMIC_BITSET_HEAP)
         assert((void*)size_class_cache_[size] == (void*)descriptor_manager_.get_descriptor(size_classes_[size].top()));
+    #endif
         return (arena_descriptor< ArenaSize, SizeClass >*)size_class_cache_[size];
     }
 
@@ -1170,18 +1174,12 @@ protected:
             }
         }
     #else
-        while(!size_classes_[size].empty(size_ranges_[size])) {
-            uint32_t val;
-            if (size_classes_[size].top(size_ranges_[size], val)) {
-                auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_descriptor(val);
-                if ((validate_descriptor_state< SizeClass >(desc) && desc->size() != desc->capacity())) {
-                    size_class_cache_[size] = desc;
-                    return desc;
-                } else {
-                    pop_descriptor<SizeClass>();
-                    if(!size_classes_[size].empty(size_ranges_[size]))
-                        goto again;
-                }
+        uint32_t val;
+        while(size_classes_[size].pop(val)) {
+            auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_descriptor(val);
+            if ((validate_descriptor_state< SizeClass >(desc) && desc->size() != desc->capacity())) {
+                size_class_cache_[size] = desc;
+                return desc;
             }
         }
     #endif
@@ -1214,7 +1212,7 @@ protected:
         }
     #else
         uint32_t val;
-        if (size_classes_[size].top(size_ranges_[size], val)) {
+        if (size_classes_[size].top(val)) {
             if (val != descriptor_manager_.get_descriptor_index(desc)) {
                 segment_manager_.deallocate_segment(desc->begin());
                 descriptor_manager_.deallocate_descriptor(desc);
@@ -1237,7 +1235,7 @@ protected:
         (void)desc;
         auto size = size_class_offset(SizeClass);
         // TODO: a case where descriptor is in a heap, but we cross the size - 1
-    #if defined(ALLOCATOR_ELASTIC_BITSET_HEAP)
+    #if defined(ALLOCATOR_ELASTIC_BITSET_HEAP) || defined(ALLOCATOR_ELASTIC_ATOMIC_BITSET_HEAP)
         if (!size_classes_[size].get(descriptor_manager_.get_descriptor_index(desc)))
     #endif
         size_classes_[size].push(descriptor_manager_.get_descriptor_index(desc));
