@@ -277,6 +277,13 @@ template< typename T, std::size_t Size > struct arena_free_list5 {
     detail::atomic_bitset< 64 * 256 > atomic_bitmap_;
 };
 
+enum {
+    DescriptorCached,
+    DescriptorUncachedFull,
+    DescriptorUncachedQueued,
+    DescriptorDeallocating,
+};
+
 struct arena_descriptor_base {
 #if defined(MAGIC)
     uint32_t magic_ = 0xDEADBEEF;
@@ -287,6 +294,7 @@ struct arena_descriptor_base {
     uint8_t* begin_;
     uint32_t size_class_;
     uint32_t free_list_size_;
+    std::atomic<uint64_t> state_;
 };
 
 static constexpr std::size_t DescriptorSize = 1<<16;
@@ -1118,6 +1126,9 @@ protected:
 
         assert(desc->size() == desc->capacity());
 
+        uint64_t state = DescriptorCached;
+        desc->state_.compare_exchange_strong(state, DescriptorUncachedFull, std::memory_order_relaxed);
+
         reset_cached_descriptor<SizeClass>();
         goto again;
     }
@@ -1134,13 +1145,20 @@ protected:
         }
         */
 
-        // TODO: cache heap is not MT-safe yet
+        // TODO: race between push and deallocate descriptor
+        // deallocate_descriptor deallocates only queued descriptors
+        // so push_descriptor should check if to deallocate instead
+
         desc->deallocate(ptr);
+
         if(__unlikely(desc->size() == 0)) {
             deallocate_descriptor<SizeClass>(desc);
         } else if(__unlikely(desc->size() == desc->capacity() - 1)) {
-            if (get_cached_descriptor<SizeClass>() != desc) {
-                push_descriptor<SizeClass>(desc);
+            uint64_t state = desc->state_.load(std::memory_order_relaxed);
+            if (state == DescriptorUncachedFull) {
+                if (desc->state_.compare_exchange_strong(state, DescriptorUncachedQueued, std::memory_order_relaxed)) {
+                    push_descriptor<SizeClass>(desc);
+                }
             }
         }
     }
@@ -1159,18 +1177,23 @@ protected:
 
     template< size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* reset_cached_descriptor() {
         auto size = size_class_offset(SizeClass);
+
     again:
         uint32_t index;
+        uint64_t state = DescriptorUncachedQueued;
         while(size_classes_[size].pop(index)) {
             auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_descriptor(index);
             if ((validate_descriptor_state< SizeClass >(desc) && desc->size() != desc->capacity())) {
-                size_class_cache_[size] = desc;
-                return desc;
+                if (desc->state_.compare_exchange_strong(state, DescriptorCached, std::memory_order_relaxed)) {
+                    size_class_cache_[size] = desc;
+                    return desc;
+                }
             }
         }
 
         auto* desc = allocate_descriptor<SizeClass>();
         assert(desc->size() == 0);
+        desc->state_.store(DescriptorCached, std::memory_order_relaxed);
         size_class_cache_[size] = desc;
         return desc;
     }
@@ -1190,16 +1213,24 @@ protected:
 
     template< size_t SizeClass > void deallocate_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
         auto size = size_class_offset(SizeClass);
-        uint32_t index = descriptor_manager_.get_descriptor_index(desc);
-        if (size_classes_[size].erase(index)) {
-            segment_manager_.deallocate_segment(desc->begin());
-            descriptor_manager_.deallocate_descriptor(desc);
+        uint64_t state = desc->state_.load(std::memory_order_relaxed);
+        if (state != DescriptorCached) {
+            if (size_classes_[size].erase(descriptor_manager_.get_descriptor_index(desc))) {
+                if (desc->state_.compare_exchange_strong(state, DescriptorDeallocating, std::memory_order_relaxed)) {
+                    size_classes_[size].erase(descriptor_manager_.get_descriptor_index(desc));
+                    segment_manager_.deallocate_segment(desc->begin());
+                    descriptor_manager_.deallocate_descriptor(desc);
+                } else {
+                    // TODO: what does this mean?
+                }
+            }
         }
     }
 
     template< size_t SizeClass > void push_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
         (void)desc;
         auto size = size_class_offset(SizeClass);
+        assert(get_cached_descriptor<SizeClass>() != desc);
         // TODO: a case where descriptor is in a heap, but we cross the size - 1
         if (!size_classes_[size].get(descriptor_manager_.get_descriptor_index(desc)))
             size_classes_[size].push(descriptor_manager_.get_descriptor_index(desc));
@@ -1224,25 +1255,11 @@ protected:
     // Thread-local - thread-local
     //
 
-    static segment_manager<PageSize, ArenaSize, MaxSize> segment_manager_;
     // Global
     static descriptor_manager<std::array<uint8_t, DescriptorSize >, MaxSize / ArenaSize, PageSize> descriptor_manager_;
-    // TODO: using bitmap has a little drawback that each descriptor can be from different page,
-    // so the bitmap can end up very sparse. To mitigate that, each thread can get a reserved range
-    // of pages, so its descriptors will fill bitmap pages. Unfortunately lock-free heap is a no-go.
-    // With 2mb page/8 arenas, the reservation will be 1Gb to fill one page bitmap completely.
-    //
-    // Allocation/deallocation race
-    //  1) allocation uses cached arena. This is safe, as cached object can't be deallocated.
-    //  2) allocation - when cache needs to be updated, allocation pops next element
-    //      and moves it to the cache
-    //  3) during deallocation, cached arena stays intact
-    //  4) deallocation - any other arena is removed from list and decommited
-    // The arena does not have to be removed from any list, it just needs to be atomically marked.
-    // as CACHED or DECOMMITED.
 
-    // Using elastic_heap is simpler and also a bit faster (and needs more space), yet
-    // it will never be lock-free.
+    // Local
+    static segment_manager<PageSize, ArenaSize, MaxSize> segment_manager_;
 
     // Local
     static std::array<elastic_atomic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> size_classes_;
