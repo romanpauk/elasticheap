@@ -1145,19 +1145,29 @@ protected:
         }
         */
 
-        // TODO: race between push and deallocate descriptor
-        // deallocate_descriptor deallocates only queued descriptors
-        // so push_descriptor should check if to deallocate instead
-
         desc->deallocate(ptr);
 
-        if(__unlikely(desc->size() == 0)) {
-            deallocate_descriptor<SizeClass>(desc);
-        } else if(__unlikely(desc->size() == desc->capacity() - 1)) {
+        if(__unlikely(desc->size() == desc->capacity() - 1)) {
             uint64_t state = desc->state_.load(std::memory_order_relaxed);
             if (state == DescriptorUncachedFull) {
                 if (desc->state_.compare_exchange_strong(state, DescriptorUncachedQueued, std::memory_order_relaxed)) {
-                    push_descriptor<SizeClass>(desc);
+                    if (desc->size() == 0) {
+                        if (desc->state_.compare_exchange_strong(state, DescriptorDeallocating, std::memory_order_relaxed)) {
+                            deallocate_descriptor<SizeClass>(desc);
+                        }
+                    } else {
+                        push_descriptor<SizeClass>(desc);
+                    }
+                }
+            }
+        } else if(__unlikely(desc->size() == 0)) {
+            uint64_t state = desc->state_.load(std::memory_order_relaxed);
+            if (state == DescriptorUncachedQueued) {
+                auto size = size_class_offset(SizeClass);
+                if (size_classes_[size].erase(descriptor_manager_.get_descriptor_index(desc))) {
+                    if (desc->state_.compare_exchange_strong(state, DescriptorDeallocating, std::memory_order_relaxed)) {
+                        deallocate_descriptor<SizeClass>(desc);
+                    }
                 }
             }
         }
@@ -1212,19 +1222,8 @@ protected:
     }
 
     template< size_t SizeClass > void deallocate_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
-        auto size = size_class_offset(SizeClass);
-        uint64_t state = desc->state_.load(std::memory_order_relaxed);
-        if (state != DescriptorCached) {
-            if (size_classes_[size].erase(descriptor_manager_.get_descriptor_index(desc))) {
-                if (desc->state_.compare_exchange_strong(state, DescriptorDeallocating, std::memory_order_relaxed)) {
-                    size_classes_[size].erase(descriptor_manager_.get_descriptor_index(desc));
-                    segment_manager_.deallocate_segment(desc->begin());
-                    descriptor_manager_.deallocate_descriptor(desc);
-                } else {
-                    // TODO: what does this mean?
-                }
-            }
-        }
+        segment_manager_.deallocate_segment(desc->begin());
+        descriptor_manager_.deallocate_descriptor(desc);
     }
 
     template< size_t SizeClass > void push_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
