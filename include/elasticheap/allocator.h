@@ -278,10 +278,16 @@ template< typename T, std::size_t Size > struct arena_free_list5 {
 };
 
 enum {
-    DescriptorCached,
-    DescriptorUncachedFull,
-    DescriptorUncachedQueued,
-    DescriptorDeallocating,
+    DescriptorNone = 0,
+    DescriptorCached = 1,
+    DescriptorFull = 2,
+    DescriptorQueued = 4,
+    DescriptorDeallocating = 8,
+};
+
+struct arena_descriptor_state {
+   uint32_t state;
+   uint32_t counter;
 };
 
 struct arena_descriptor_base {
@@ -1127,8 +1133,20 @@ protected:
         assert(desc->size() == desc->capacity());
 
         uint64_t state = DescriptorCached;
-        desc->state_.compare_exchange_strong(state, DescriptorUncachedFull, std::memory_order_relaxed);
-
+        desc->state_.compare_exchange_strong(state, DescriptorFull, std::memory_order_relaxed);
+        //
+        // Correctness:
+        //  1) requirement to observe all three states to be set (Full, Queued, Empty)
+        //  2) single deallocator due to erase()
+        //  3) counter for each lifetime phase (Cached->Full->Queued->Empty->Cached|Deallocated)
+        //      to avoid ABA
+        //  4) no need for refcounting, as objects are accessible indefinitely (just zeroed after madvise).
+        // Not sure if this is simplest, but it should work.
+        //
+        // add(Full)
+        // if also Queued and Empty, try to erase and deallocate
+        // if erase fails, not yet pushed, handled after push
+        //
         reset_cached_descriptor<SizeClass>();
         goto again;
     }
@@ -1148,9 +1166,15 @@ protected:
         desc->deallocate(ptr);
 
         if(__unlikely(desc->size() == desc->capacity() - 1)) {
+            //
+            // desc.add(Queued);
+            // push_descriptor() - this has to run after add to avoid ABA
+            // if also Full and Empty, try to erase and deallocate
+            // if erase fails, someone else erased
+            //
             uint64_t state = desc->state_.load(std::memory_order_relaxed);
-            if (state == DescriptorUncachedFull) {
-                if (desc->state_.compare_exchange_strong(state, DescriptorUncachedQueued, std::memory_order_relaxed)) {
+            if (state == DescriptorFull) {
+                if (desc->state_.compare_exchange_strong(state, DescriptorQueued, std::memory_order_relaxed)) {
                     if (desc->size() == 0) {
                         if (desc->state_.compare_exchange_strong(state, DescriptorDeallocating, std::memory_order_relaxed)) {
                             deallocate_descriptor<SizeClass>(desc);
@@ -1161,8 +1185,14 @@ protected:
                 }
             }
         } else if(__unlikely(desc->size() == 0)) {
+            //
+            // desc.add(Empty)
+            // if Full and Queued, try to erase and deallocate
+            // if erase fails, either not yet pushed (handled after push as it is already Empty),
+            // or someone else erased
+            //
             uint64_t state = desc->state_.load(std::memory_order_relaxed);
-            if (state == DescriptorUncachedQueued) {
+            if (state == DescriptorQueued) {
                 auto size = size_class_offset(SizeClass);
                 if (size_classes_[size].erase(descriptor_manager_.get_descriptor_index(desc))) {
                     if (desc->state_.compare_exchange_strong(state, DescriptorDeallocating, std::memory_order_relaxed)) {
@@ -1190,7 +1220,7 @@ protected:
 
     again:
         uint32_t index;
-        uint64_t state = DescriptorUncachedQueued;
+        uint64_t state = DescriptorQueued;
         while(size_classes_[size].pop(index)) {
             auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_descriptor(index);
             if ((validate_descriptor_state< SizeClass >(desc) && desc->size() != desc->capacity())) {
@@ -1221,11 +1251,6 @@ protected:
         return desc;
     }
 
-    template< size_t SizeClass > void deallocate_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
-        segment_manager_.deallocate_segment(desc->begin());
-        descriptor_manager_.deallocate_descriptor(desc);
-    }
-
     template< size_t SizeClass > void push_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
         (void)desc;
         auto size = size_class_offset(SizeClass);
@@ -1233,6 +1258,11 @@ protected:
         // TODO: a case where descriptor is in a heap, but we cross the size - 1
         if (!size_classes_[size].get(descriptor_manager_.get_descriptor_index(desc)))
             size_classes_[size].push(descriptor_manager_.get_descriptor_index(desc));
+    }
+
+    template< size_t SizeClass > void deallocate_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
+        segment_manager_.deallocate_segment(desc->begin());
+        descriptor_manager_.deallocate_descriptor(desc);
     }
 
     template< std::size_t SizeClass > bool validate_descriptor_state(arena_descriptor<ArenaSize, SizeClass>* desc) {
