@@ -9,6 +9,7 @@
 #include <elasticheap/detail/bitset_heap.h>
 #include <elasticheap/detail/atomic_bitset_heap.h>
 #include <elasticheap/detail/elastic_array.h>
+#include <elasticheap/detail/elastic_atomic_array.h>
 #include <elasticheap/detail/elastic_atomic_bitset_heap.h>
 #include <elasticheap/detail/utils.h>
 
@@ -367,7 +368,7 @@ template< typename T, std::size_t Size, std::size_t PageSize > struct descriptor
 
 private:
     void* mmap_ = 0;
-    detail::elastic_array< T, Size, PageSize > values_;
+    detail::elastic_atomic_array< T, Size, PageSize > values_;
 };
 
 template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {

@@ -7,11 +7,12 @@
 
 #include <elasticheap/detail/utils.h>
 
+#include <array>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
-
-#include <type_traits>
 #include <limits>
+#include <type_traits>
 
 #include <sys/mman.h>
 

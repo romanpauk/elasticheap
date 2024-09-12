@@ -1,3 +1,8 @@
+//
+// See LICENSE for license and copyright information
+// SPDX-License-Identifier: MIT
+//
+
 #pragma once
 
 #include <elasticheap/detail/atomic_bitset.h>
