@@ -20,20 +20,61 @@
 
 namespace elasticheap::detail {
 
-template< typename T, std::size_t Size, std::size_t PageSize > struct elastic_atomic_array {
-    static constexpr std::size_t MmapSize = (sizeof(T) * Size + PageSize - 1) & ~(PageSize - 1);
-    static constexpr std::size_t PageCount = (sizeof(T) * Size + PageSize - 1) / PageSize;
+template< std::size_t SizeofT, std::size_t PageCount, std::size_t PageSize > struct elastic_storage {
 
     using counter_type =
-        std::conditional_t< PageSize / sizeof(T) < std::numeric_limits<uint8_t>::max()  / 2, uint8_t,
-        std::conditional_t< PageSize / sizeof(T) < std::numeric_limits<uint16_t>::max() / 2, uint16_t,
-        std::conditional_t< PageSize / sizeof(T) < std::numeric_limits<uint32_t>::max() / 2, uint32_t,
+        std::conditional_t< PageSize / SizeofT < std::numeric_limits<uint8_t>::max()  / 2, uint8_t,
+        std::conditional_t< PageSize / SizeofT < std::numeric_limits<uint16_t>::max() / 2, uint16_t,
+        std::conditional_t< PageSize / SizeofT < std::numeric_limits<uint32_t>::max() / 2, uint32_t,
         uint64_t
     >>>;
 
-    static_assert(PageSize / sizeof(T) < std::numeric_limits<uint64_t>::max() / 2);
+    static_assert(PageSize / SizeofT < std::numeric_limits<uint64_t>::max() / 2);
 
     static constexpr counter_type CounterMappedBit = counter_type{1} << (sizeof(counter_type)*8 - 1);
+
+    // TODO: this should use per-cpu locks
+    std::array< std::mutex, PageCount > locks_;
+    std::array< std::atomic< counter_type >, PageCount > counters_ = {0};
+
+    void acquire(std::size_t page, void* memory) {
+        auto& counter = counters_[page];
+        auto state = counter.fetch_add(1, std::memory_order_relaxed);
+        if (!(state & CounterMappedBit)) {
+            std::lock_guard< std::mutex > lock(locks_[page]);
+            state = counter.load(std::memory_order_relaxed);
+            if (!(state & CounterMappedBit)) {
+                if (mprotect(mask<PageSize>(memory), PageSize, PROT_READ | PROT_WRITE) != 0)
+                    __failure("mprotect");
+                counter.fetch_or(CounterMappedBit, std::memory_order_relaxed);
+            }
+        }
+    }
+
+    void release(std::size_t page, void* memory) {
+        assert(counters_[page] > 0);
+
+        auto& counter = counters_[page];
+        auto state = counter.fetch_sub(1, std::memory_order_relaxed);
+        if ((state & ~CounterMappedBit) == 1) {
+            std::lock_guard< std::mutex > lock(locks_[page]);
+            state = counter.load(std::memory_order_relaxed);
+            if ((state & ~CounterMappedBit) == 0) {
+                if (madvise(mask<PageSize>(memory), PageSize, MADV_DONTNEED) != 0)
+                    __failure("madvise");
+                counter.fetch_and(static_cast<counter_type>(~CounterMappedBit), std::memory_order_relaxed);
+            }
+        }
+    }
+
+    std::size_t count(std::size_t page) const {
+        return counters_[page].load() & ~CounterMappedBit;
+    }
+};
+
+template< typename T, std::size_t Size, std::size_t PageSize > struct elastic_atomic_array {
+    static constexpr std::size_t MmapSize = (sizeof(T) * Size + PageSize - 1) & ~(PageSize - 1);
+    static constexpr std::size_t PageCount = (sizeof(T) * Size + PageSize - 1) / PageSize;
 
     elastic_atomic_array(void* memory) {
         memory_ = (T*)align<PageSize>(memory);
@@ -41,20 +82,7 @@ template< typename T, std::size_t Size, std::size_t PageSize > struct elastic_at
 
     T* acquire(std::size_t i) {
         assert(i < Size);
-
-        auto& counter = page_refs_[page(i)];
-        auto state = counter.fetch_add(1, std::memory_order_relaxed);
-        if (!(state & CounterMappedBit)) {
-            std::lock_guard< std::mutex > lock(page_locks_[page(i)]);
-            state = counter.load(std::memory_order_relaxed);
-            if (!(state & CounterMappedBit)) {
-                auto ptr = &memory_[i];
-                if (mprotect(mask<PageSize>(&memory_[i]), PageSize, PROT_READ | PROT_WRITE) != 0)
-                    __failure("mprotect");
-                counter.fetch_or(CounterMappedBit, std::memory_order_relaxed);
-            }
-        }
-
+        storage_.acquire(page(i), &memory_[i]);
         return &memory_[i];
     }
 
@@ -64,20 +92,6 @@ template< typename T, std::size_t Size, std::size_t PageSize > struct elastic_at
 
     void release(std::size_t i) {
         assert(i < Size);
-        assert(page_refs_[page(i)] > 0);
-
-        auto& counter = page_refs_[page(i)];
-        auto state = counter.fetch_sub(1, std::memory_order_relaxed);
-        if ((state & ~CounterMappedBit) == 1) {
-            std::lock_guard< std::mutex > lock(page_locks_[page(i)]);
-            state = counter.load(std::memory_order_relaxed);
-            if ((state & ~CounterMappedBit) == 0) {
-                auto ptr = mask<PageSize>(&memory_[i]);
-                if (madvise(mask<PageSize>(&memory_[i]), PageSize, MADV_DONTNEED) != 0)
-                    __failure("madvise");
-                counter.fetch_and(static_cast<counter_type>(~CounterMappedBit), std::memory_order_relaxed);
-            }
-        }
     }
 
     uint32_t get_index(T* desc) {
@@ -97,9 +111,7 @@ private:
         return i * sizeof(T) / PageSize;
     }
 
-    // TODO: this should use per-cpu locks
-    std::array< std::mutex, PageCount > page_locks_;
-    std::array< std::atomic< counter_type >, PageCount > page_refs_ = {0};
+    elastic_storage< sizeof(T), PageCount, PageSize > storage_;
     void* mmap_ = 0;
     T* memory_ = 0;
 };

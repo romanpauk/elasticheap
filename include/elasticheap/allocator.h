@@ -457,7 +457,7 @@ private:
     alignas(64) std::atomic<uint64_t> memory_size_ = 0;
     void* mmap_ = 0;
     void* memory_ = 0;
-    elastic_atomic_bitset_heap< uint32_t, PageCount, MetadataPageSize > deallocated_pages_;
+    detail::elastic_atomic_bitset_heap< uint32_t, PageCount, MetadataPageSize > deallocated_pages_;
 };
 
 template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > struct segment_manager {
@@ -575,7 +575,7 @@ private:
     descriptor_manager< page_descriptor, PageCount, MetadataPageSize > page_descriptors_;
 
     // Local, but could also be Global.
-    elastic_atomic_bitset_heap< uint32_t, PageCount, MetadataPageSize > allocated_pages_;
+    detail::elastic_atomic_bitset_heap< uint32_t, PageCount, MetadataPageSize > allocated_pages_;
 };
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > class arena_allocator_base {
@@ -812,7 +812,7 @@ protected:
     static segment_manager<PageSize, ArenaSize, MaxSize> segment_manager_;
 
     // Local
-    static std::array<elastic_atomic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> size_classes_;
+    static std::array< detail::elastic_atomic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> size_classes_;
     // Thread-local
     static std::array<arena_descriptor_base*, 23> size_class_cache_;
 };
@@ -821,7 +821,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> segm
 
 template < std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> descriptor_manager<std::array<uint8_t, DescriptorSize>, MaxSize / ArenaSize, PageSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::descriptor_manager_;
 
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<elastic_atomic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_classes_;
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array< detail::elastic_atomic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_classes_;
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<arena_descriptor_base*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_class_cache_;
 

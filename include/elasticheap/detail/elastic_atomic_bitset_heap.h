@@ -6,6 +6,7 @@
 #pragma once
 
 #include <elasticheap/detail/atomic_bitset.h>
+#include <elasticheap/detail/elastic_atomic_array.h>
 #include <elasticheap/detail/utils.h>
 
 #include <atomic>
@@ -14,18 +15,13 @@
 
 #include <sys/mman.h>
 
-namespace elasticheap {
+namespace elasticheap::detail {
 
 template< typename T, std::size_t Capacity, std::size_t PageSize > struct elastic_atomic_bitset_heap {
     static constexpr std::size_t MmapSize = sizeof(detail::atomic_bitset<Capacity>) + PageSize - 1;
-    static_assert(Capacity <= std::numeric_limits<uint32_t>::max());
+    static constexpr std::size_t PageCount = (Capacity + PageSize * 8 - 1) / (PageSize * 8);
 
-    using counter_type =
-        std::conditional_t< PageSize / sizeof(T) <= std::numeric_limits<uint8_t>::max(), uint8_t,
-        std::conditional_t< PageSize / sizeof(T) <= std::numeric_limits<uint16_t>::max(), uint16_t,
-        std::conditional_t< PageSize / sizeof(T) <= std::numeric_limits<uint32_t>::max(), uint32_t,
-        uint64_t
-    >>>;
+    static_assert(Capacity <= std::numeric_limits<uint32_t>::max());
 
     static constexpr std::size_t capacity() { return Capacity; }
 
@@ -40,10 +36,8 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
 
     void push(T value) {
         assert(value < Capacity);
-        if (page_refs_[page(value)]++ == 0) {
-            if (mprotect((uint8_t*)bitmap_ + page(value) * PageSize, PageSize, PROT_READ|PROT_WRITE) == -1)
-                __failure("mprotect");
-        }
+
+        storage_.acquire(page(value), (uint8_t*)bitmap_ + page(value) * PageSize);
 
         assert(!bitmap_->get(value));
         bitmap_->set(value);
@@ -72,10 +66,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
 
         bool cleared = bitmap_->clear(value);
 
-        if (--page_refs_[page(value)] == 0) {
-            if (madvise((uint8_t*)bitmap_ + page(value) * PageSize, PageSize, MADV_DONTNEED) == -1)
-                __failure("madvise");
-        }
+        storage_.release(page(value), (uint8_t*)bitmap_ + page(value) * PageSize);
 
         // TODO: recalculate the range
         // Note that there is an use-case of erase/push that does not modify the range
@@ -129,11 +120,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
                 if (get(i)) {
                     if (range_.compare_exchange_strong(r, pack(max, i + 1), std::memory_order_relaxed)) {
                         bitmap_->clear(i);
-                        assert(page_refs_[page(i)] > 0);
-                        if (--page_refs_[page(i)] == 0) {
-                            if (madvise((uint8_t*)bitmap_ + page(i) * PageSize, PageSize, MADV_DONTNEED) == -1)
-                                __failure("madvise");
-                        }
+                        storage_.release(page(i), (uint8_t*)bitmap_ + page(i) * PageSize);
 
                         value = i;
                         std::atomic_thread_fence(std::memory_order_release);
@@ -148,11 +135,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
                 assert(i == max);
                 if (get(i)) {
                     bitmap_->clear(i);
-
-                    if (--page_refs_[page(i)] == 0) {
-                        if (madvise((uint8_t*)bitmap_ + page(i) * PageSize, PageSize, MADV_DONTNEED) == -1)
-                            __failure("madvise");
-                    }
+                    storage_.release(page(i), (uint8_t*)bitmap_ + page(i) * PageSize);
 
                     value = i;
                     std::atomic_thread_fence(std::memory_order_release);
@@ -169,7 +152,8 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
     }
 
     bool get(T value) const {
-        if (page_refs_[page(value)] > 0)
+        // TODO: does not look safe
+        if (storage_.count(page(value)) > 0)
             return bitmap_->get(value);
         return false;
     }
@@ -188,7 +172,7 @@ private:
         return ((uint64_t)max << 32) | min;
     }
 
-    std::array<counter_type, (Capacity + PageSize * 8 - 1) / (PageSize * 8) > page_refs_;
+    detail::elastic_storage< sizeof(T), PageCount, PageSize > storage_;
 
     uint8_t* mmap_;
     detail::atomic_bitset<Capacity>* bitmap_;
