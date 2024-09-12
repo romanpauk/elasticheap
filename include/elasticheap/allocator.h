@@ -287,9 +287,8 @@ struct arena_descriptor_base {
     uint8_t* begin_;
     uint32_t size_class_;
     uint32_t free_list_size_;
-    std::atomic<uint64_t> state_;
 
-    std::atomic<arena_descriptor_state> state;
+    std::atomic<arena_descriptor_state> state_;
     static_assert(std::atomic<arena_descriptor_state>::is_always_lock_free);
 };
 
@@ -1065,18 +1064,18 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > cla
     static std::atomic<uint64_t> counter_;
 
     template< typename T > void init_descriptor_state(T* desc, uint64_t state) {
-        desc->state.store({ static_cast<uint8_t>(state), counter_.fetch_add(1, std::memory_order_relaxed) }, std::memory_order_relaxed);
+        desc->state_.store({ static_cast<uint8_t>(state), counter_.fetch_add(1, std::memory_order_relaxed) }, std::memory_order_relaxed);
     }
 
     template< typename T > uint64_t read_descriptor_state(T* desc) {
-        return desc->state.load(std::memory_order_acquire).state;
+        return desc->state_.load(std::memory_order_acquire).state;
     }
 
     template < typename T > uint64_t update_descriptor_state(T* desc, uint64_t state) {
-        auto initial = desc->state.load(std::memory_order_relaxed);
+        auto initial = desc->state_.load(std::memory_order_relaxed);
         auto current = initial;
         while(true) {
-            if (desc->state.compare_exchange_strong(current, { static_cast<uint8_t>(current.state | state), current.counter }, std::memory_order_release)) {
+            if (desc->state_.compare_exchange_strong(current, { static_cast<uint8_t>(current.state | state), current.counter }, std::memory_order_release)) {
                 //assert((current.state & ~state) == 0);
                 return current.state | state;
             } else if (current.counter != initial.counter) {
