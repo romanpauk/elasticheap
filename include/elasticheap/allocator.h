@@ -236,7 +236,7 @@ enum {
     DescriptorFull = 2,
     DescriptorQueued = 4,
     DescriptorEmpty = 8,
-    DescriptorDone = DescriptorCached | DescriptorFull | DescriptorQueued | DescriptorEmpty,
+    DescriptorDone = DescriptorFull | DescriptorQueued | DescriptorEmpty,
 };
 
 struct arena_descriptor_state {
@@ -674,12 +674,22 @@ protected:
         //  Multiple threads deallocate
         //
         //  1) requirement to observe all three states to be set (Full, Queued, Empty)
-        //  2) single deallocator due to erase()
+        //  2) safe deallocation due to erase()
         //  3) counter for each lifetime phase (Cached->Full->Queued->Empty->Cached|Deallocated)
         //      to avoid ABA
-        //  4) no need for refcounting, as objects are accessible indefinitely (just zeroed after madvise).
-        // Not sure if this is simplest, but it should work.
-        // The counter needs to be global, so it is unique for different threads.
+        //  4) no need for refcounting, as descriptors are readable indefinitely (just zeroed after madvise).
+        //  5) cached descriptors can't be deallocated
+        //  6) queued descriptors can be deallocated
+        //
+
+        // TODO: use uint64_t to allow for fetch_and()
+        auto state = desc->state_.load(std::memory_order_relaxed);
+        while(true) {
+            if (desc->state_.compare_exchange_strong(state,
+                    { static_cast<uint8_t>(state.state & ~DescriptorCached), state.counter },
+                    std::memory_order_release))
+                break;
+        }
 
         if (update_descriptor_state(desc, DescriptorFull) == DescriptorDone) {
             deallocate_descriptor<SizeClass>(desc);
@@ -694,16 +704,24 @@ protected:
         /*
         if (__likely(desc->thread_id() == thread_id())) {
             desc->deallocate_local(ptr);
-            if (__unlikely(desc->size_local() == 0)) {
-            }
+            if (cleanup_descriptor(desc, desc->size_local()))
+                cleanup_descriptor(desc, desc->size());
         } else {
             desc->deallocate_global(ptr);
+            cleanup_descriptor(desc, desc->size());
         }
         */
 
         desc->deallocate(ptr);
 
-        if(__unlikely(desc->size() == desc->capacity() - 1)) {
+        cleanup_descriptor<SizeClass>(desc, desc->size());
+    }
+
+    template< size_t SizeClass > void cleanup_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc, std::size_t size) {
+        if (desc->state_.load(std::memory_order_acquire).state & DescriptorCached)
+            return;
+
+        if(__unlikely(size == desc->capacity() - 1)) {
             uint64_t state = 0;
             if ((state = update_descriptor_state(desc, DescriptorQueued))) {
                 // TODO: why?
@@ -713,7 +731,7 @@ protected:
                 if (read_descriptor_state(desc) == DescriptorDone)
                     deallocate_descriptor<SizeClass>(desc);
             }
-        } else if(__unlikely(desc->size() == 0)) {
+        } else if(__unlikely(size == 0)) {
             uint64_t state = 0;
             if ((state = update_descriptor_state(desc, DescriptorEmpty)) == DescriptorDone) {
                 deallocate_descriptor<SizeClass>(desc);
@@ -775,6 +793,7 @@ protected:
         auto size = size_class_offset(SizeClass);
         assert(get_cached_descriptor<SizeClass>() != desc);
         // TODO: a case where descriptor is in a heap, but we cross the size - 1
+        // TODO: not thread-safe
         if (!size_classes_[size].get(descriptor_manager_.get_descriptor_index(desc)))
             size_classes_[size].push(descriptor_manager_.get_descriptor_index(desc));
     }
