@@ -39,6 +39,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
 
         storage_.acquire(page(value), (uint8_t*)bitmap_ + page(value) * PageSize);
 
+        // TODO: thread safety, check that set succeeded
         assert(!bitmap_->get(value));
         bitmap_->set(value);
 
@@ -66,6 +67,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
 
         bool cleared = bitmap_->clear(value);
 
+        // TODO: check that clear succeeded
         storage_.release(page(value), (uint8_t*)bitmap_ + page(value) * PageSize);
 
         // TODO: recalculate the range

@@ -236,15 +236,8 @@ enum {
     DescriptorFull = 2,
     DescriptorQueued = 4,
     DescriptorEmpty = 8,
+    DescriptorGlobal = 16,
     DescriptorDone = DescriptorFull | DescriptorQueued | DescriptorEmpty,
-};
-
-struct arena_descriptor_state {
-    arena_descriptor_state() = default;
-    arena_descriptor_state(uint8_t s, uint64_t c): state(s), counter(c) {}
-
-    uint64_t state: 8;
-    uint64_t counter: 56;
 };
 
 struct arena_descriptor_base {
@@ -258,8 +251,7 @@ struct arena_descriptor_base {
     uint32_t size_class_;
     uint32_t free_list_size_;
 
-    std::atomic<arena_descriptor_state> state_;
-    static_assert(std::atomic<arena_descriptor_state>::is_always_lock_free);
+    std::atomic<uint64_t> state_;
 };
 
 static constexpr std::size_t DescriptorSize = 1<<16;
@@ -297,7 +289,7 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
         return ptr;
     }
 
-    void deallocate(void* ptr) {
+    std::size_t deallocate(void* ptr) {
     #if defined(MAGIC)
         assert(magic_ == 0xDEADBEEF);
     #endif
@@ -308,6 +300,7 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
         assert(is_ptr_valid(ptr));
         size_t index = ((uint8_t*)ptr - begin_) / SizeClass;
         free_list_.push(index, free_list_size_);
+        return size(); // TODO: for MT, this needs to be atomic
     }
 
     static constexpr std::size_t capacity() { return Capacity; }
@@ -588,21 +581,32 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > cla
     static std::atomic<uint64_t> counter_;
 
     template< typename T > void init_descriptor_state(T* desc, uint64_t state) {
-        desc->state_.store({ static_cast<uint8_t>(state), counter_.fetch_add(1, std::memory_order_relaxed) }, std::memory_order_relaxed);
+        desc->state_.store(pack_descriptor_state(state, counter_.fetch_add(1, std::memory_order_relaxed) & ~(0xFFull << 56)), std::memory_order_relaxed);
     }
 
     template< typename T > uint64_t read_descriptor_state(T* desc) {
-        return desc->state_.load(std::memory_order_acquire).state;
+        return desc->state_.load(std::memory_order_acquire) & 0xFF;
+    }
+
+    static uint64_t pack_descriptor_state(uint64_t state, uint64_t counter) {
+        assert(state <= 0xFF);
+        assert(counter < (0xFFull << 56));
+        return state | (counter << 8);
+    }
+
+    static std::pair< uint64_t, uint64_t > unpack_descriptor_state(uint64_t state) {
+        return { state & 0xFF, state >> 8 };
     }
 
     template < typename T > uint64_t update_descriptor_state(T* desc, uint64_t state) {
         auto initial = desc->state_.load(std::memory_order_relaxed);
         auto current = initial;
         while(true) {
-            if (desc->state_.compare_exchange_strong(current, { static_cast<uint8_t>(current.state | state), current.counter }, std::memory_order_release)) {
+            auto unpacked = unpack_descriptor_state(current);
+            if (desc->state_.compare_exchange_strong(current, pack_descriptor_state(unpacked.first | state, unpacked.second)), std::memory_order_release) {
                 //assert((current.state & ~state) == 0);
-                return current.state | state;
-            } else if (current.counter != initial.counter) {
+                return unpacked.first | state;
+            } else if (unpacked.second != unpack_descriptor_state(initial).second) {
                 return 0;
             }
         }
@@ -666,7 +670,13 @@ protected:
         if (__likely(desc->size() < desc->capacity()))
             return desc->allocate();
 
+        // Last allocation
         assert(desc->size() == desc->capacity());
+
+        //auto ptr = desc->allocate();
+        //desc->state_.fetch_and(~DescriptorCached, std::memory_order_relaxed);
+        //reset_cached_descriptor<SizeClass>();
+        //return ptr;
 
         //
         // Descriptor state tracking:
@@ -681,15 +691,22 @@ protected:
         //  5) cached descriptors can't be deallocated
         //  6) queued descriptors can be deallocated
         //
+        //
+        // TODO: again, it is not understandable:
+        //  allocate():
+        //      update size
+        //      if size == full
+        //          store to heap
+        //          if size == 0, try erase and destroy
+        //
+        //  deallocate():
+        //      update size
+        //      if size == 0, try erase and destroy
+        //
+        // This is simple, but reset_cached_descriptor() will now see full descriptors
+        //
 
-        // TODO: use uint64_t to allow for fetch_and()
-        auto state = desc->state_.load(std::memory_order_relaxed);
-        while(true) {
-            if (desc->state_.compare_exchange_strong(state,
-                    { static_cast<uint8_t>(state.state & ~DescriptorCached), state.counter },
-                    std::memory_order_release))
-                break;
-        }
+        desc->state_.fetch_and(~DescriptorCached, std::memory_order_relaxed);
 
         if (update_descriptor_state(desc, DescriptorFull) == DescriptorDone) {
             deallocate_descriptor<SizeClass>(desc);
@@ -703,23 +720,39 @@ protected:
         auto* desc = get_descriptor<SizeClass>(ptr);
         /*
         if (__likely(desc->thread_id() == thread_id())) {
-            desc->deallocate_local(ptr);
-            if (cleanup_descriptor(desc, desc->size_local()))
+            auto size = desc->deallocate_local(ptr);
+            auto state = desc->state_.load(std::memory_order_relaxed);
+            if (state & DescriptorCached)
+                return;
+
+            if (state & DescriptorGlobal) {
                 cleanup_descriptor(desc, desc->size());
-        } else {
-            desc->deallocate_global(ptr);
-            cleanup_descriptor(desc, desc->size());
+            } else {
+                state = desc->state_.load(std::memory_order_acquire);
+                if (state & DescriptorGlobal) {
+                    cleanup_descriptor(desc, desc->size());
+                }
+            }
+
+            return;
         }
+
+        auto size = desc->deallocate_global(ptr);
+        auto state = desc->state_.load(std::memory_order_acquire);
+        if (state & DescriptorCached)
+            return;
+
+        if (!(state & DescriptorGlobal))
+            desc_.supdate_descriptor_state(desc, DescriptorGlobal);
+
+        cleanup_descriptor(desc, size);
         */
 
-        desc->deallocate(ptr);
-
-        cleanup_descriptor<SizeClass>(desc, desc->size());
+        auto size = desc->deallocate(ptr);
+        cleanup_descriptor<SizeClass>(desc, size);
     }
 
     template< size_t SizeClass > void cleanup_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc, std::size_t size) {
-        if (desc->state_.load(std::memory_order_acquire).state & DescriptorCached)
-            return;
 
         if(__unlikely(size == desc->capacity() - 1)) {
             uint64_t state = 0;
