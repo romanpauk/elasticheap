@@ -26,7 +26,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
     static constexpr std::size_t capacity() { return Capacity; }
 
     elastic_atomic_bitset_heap()
-        : mmap_((uint8_t*)mmap(0, MmapSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0))
+        : mmap_((uint8_t*)mmap(0, MmapSize, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0))
     {
         if (mmap_ == MAP_FAILED)
             __failure("mmap");
@@ -39,7 +39,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
 
         storage_.acquire(page(value), (uint8_t*)bitmap_ + page(value) * PageSize);
 
-        // TODO: thread safety, check that set succeeded
+        // TODO: thread safety, check that set succeeded and if not, release
         assert(!bitmap_->get(value));
         bitmap_->set(value);
 
@@ -66,13 +66,13 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
             return false;
 
         bool cleared = bitmap_->clear(value);
+        if (cleared) {
+            storage_.release(page(value), (uint8_t*)bitmap_ + page(value) * PageSize);
 
-        // TODO: check that clear succeeded
-        storage_.release(page(value), (uint8_t*)bitmap_ + page(value) * PageSize);
-
-        // TODO: recalculate the range
-        // Note that there is an use-case of erase/push that does not modify the range
-        std::atomic_thread_fence(std::memory_order_release);
+            // TODO: recalculate the range
+            // Note that there is an use-case of erase/push that does not modify the range
+            std::atomic_thread_fence(std::memory_order_release);
+        }
         return cleared;
 
         auto r = range_.load(std::memory_order_acquire);
@@ -154,10 +154,7 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
     }
 
     bool get(T value) const {
-        // TODO: does not look safe
-        if (storage_.count(page(value)) > 0)
-            return bitmap_->get(value);
-        return false;
+        return bitmap_->get(value);
     }
 
 private:

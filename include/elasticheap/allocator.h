@@ -328,7 +328,7 @@ template< typename T, std::size_t Size, std::size_t PageSize > struct descriptor
     static constexpr std::size_t MmapSize = (sizeof(T) * Size + PageSize - 1) & ~(PageSize - 1);
 
     descriptor_manager()
-        : mmap_(mmap(0, MmapSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0))
+        : mmap_(mmap(0, MmapSize, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0))
         , values_(align<PageSize>(mmap_))
     {
         if (mmap_ == MAP_FAILED)
@@ -372,7 +372,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
     page_manager()
         : deallocated_pages_()
     {
-        mmap_ = (uint8_t*)mmap(0, MmapSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        mmap_ = (uint8_t*)mmap(0, MmapSize, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (mmap_ == MAP_FAILED)
             __failure("mmap");
 
@@ -408,8 +408,8 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
         assert(is_page_valid(ptr));
         assert(!is_page_deallocated(ptr));
 
-        //mprotect(ptr, PageSize, PROT_NONE);
-        madvise(ptr, PageSize, MADV_DONTNEED);
+        if (mmap(ptr, PageSize, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == MAP_FAILED)
+            __failure("mmap");
 
         deallocated_pages_.push(get_page_index(ptr));
     #if defined(STATS)
@@ -687,7 +687,7 @@ protected:
         //  2) safe deallocation due to erase()
         //  3) counter for each lifetime phase (Cached->Full->Queued->Empty->Cached|Deallocated)
         //      to avoid ABA
-        //  4) no need for refcounting, as descriptors are readable indefinitely (just zeroed after madvise).
+        //  4) no need for refcounting, as descriptors are readable indefinitely (just zeroed).
         //  5) cached descriptors can't be deallocated
         //  6) queued descriptors can be deallocated
         //
@@ -695,6 +695,7 @@ protected:
         // TODO: again, it is not understandable:
         //  allocate():
         //      update size
+        //      NOTE: desc can't be deleted until it is moved to heap
         //      if size == full
         //          store to heap
         //          if size == 0, try erase and destroy
@@ -703,7 +704,8 @@ protected:
         //      update size
         //      if size == 0, try erase and destroy
         //
-        // This is simple, but reset_cached_descriptor() will now see full descriptors
+        // This is simple, but reset_cached_descriptor() will now see full descriptors...
+        // Descriptors are always dereferencable, reads are fine, all will be zero
         //
 
         desc->state_.fetch_and(~DescriptorCached, std::memory_order_relaxed);

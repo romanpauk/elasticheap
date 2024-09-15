@@ -52,8 +52,8 @@ template< typename T, std::size_t Size, std::size_t PageSize > struct elastic_ar
         assert(page_refs_[page(i)] > 0);
         if (--page_refs_[page(i)] == 0) {
             auto ptr = mask<PageSize>(&memory_[i]);
-            if (madvise(mask<PageSize>(&memory_[i]), PageSize, MADV_DONTNEED) != 0)
-                __failure("madvise");
+            if (mmap(mask<PageSize>(&memory_[i]), PageSize, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == MAP_FAILED)
+                __failure("mmap");
         }
     }
 

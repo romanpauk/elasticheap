@@ -60,8 +60,8 @@ template< std::size_t SizeofT, std::size_t PageCount, std::size_t PageSize > str
             std::lock_guard< std::mutex > lock(locks_[page]);
             state = counter.load(std::memory_order_relaxed);
             if ((state & ~CounterMappedBit) == 0) {
-                if (madvise(mask<PageSize>(memory), PageSize, MADV_DONTNEED) != 0)
-                    __failure("madvise");
+                if (mmap(mask<PageSize>(memory), PageSize, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == MAP_FAILED)
+                    __failure("mmap");
                 counter.fetch_and(static_cast<counter_type>(~CounterMappedBit), std::memory_order_relaxed);
             }
         }
