@@ -664,49 +664,35 @@ protected:
         if (__likely(desc->size() < desc->capacity()))
             return desc->allocate();
 
-        // Last allocation
         assert(desc->size() == desc->capacity());
-
-        //auto ptr = desc->allocate();
-        //desc->state_.fetch_and(~DescriptorCached, std::memory_order_relaxed);
-        //reset_cached_descriptor<SizeClass>();
-        //return ptr;
 
         //
         // Descriptor state tracking:
         //  Single thread allocates
         //  Multiple threads deallocate
         //
-        //  1) requirement to observe all three states to be set (Full, Queued, Empty)
-        //  2) safe deallocation due to erase()
-        //  3) counter for each lifetime phase (Cached->Full->Queued->Empty->Cached|Deallocated)
-        //      to avoid ABA
-        //  4) no need for refcounting, as descriptors are readable indefinitely (just zeroed).
-        //  5) cached descriptors can't be deallocated
-        //  6) queued descriptors can be deallocated
-        //
-        //
-        // TODO: again, it is not understandable:
         //  allocate():
-        //      update size
-        //      NOTE: desc can't be deleted until it is moved to heap
-        //      if size == full
-        //          store to heap
-        //          if size == 0, try erase and destroy
+        //      if not full
+        //          return alloc()
         //
         //  deallocate():
-        //      update size
-        //      if size == 0, try erase and destroy
+        //      if TLS
+        //          if fully locally empty
+        //              destroy
         //
-        // This is simple, but reset_cached_descriptor() will now see full descriptors...
-        // Descriptors are always dereferencable, reads are fine, all will be zero
+        //      size = dealloc()
+        //      if size = N - 1
+        //          push()
+        //          if size() == 0
+        //              erase() && destroy
+        //
+        //      if size == 0
+        //          erase() && destroy
+        //
         //
 
-        desc->state_.fetch_and(~DescriptorCached, std::memory_order_relaxed);
-
-        if (update_descriptor_state(desc, DescriptorFull) == DescriptorDone) {
+        if (update_descriptor_state(desc, DescriptorFull) == DescriptorDone)
             deallocate_descriptor<SizeClass>(desc);
-        }
 
         reset_cached_descriptor<SizeClass>();
         goto again;
