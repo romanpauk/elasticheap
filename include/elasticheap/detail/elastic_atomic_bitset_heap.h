@@ -7,6 +7,7 @@
 
 #include <elasticheap/detail/atomic_bitset.h>
 #include <elasticheap/detail/elastic_atomic_array.h>
+#include <elasticheap/detail/memory.h>
 #include <elasticheap/detail/utils.h>
 
 #include <atomic>
@@ -26,12 +27,14 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
     static constexpr std::size_t capacity() { return Capacity; }
 
     elastic_atomic_bitset_heap()
-        : mmap_((uint8_t*)mmap(0, MmapSize, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0))
+        : mmap_((uint8_t*)detail::memory::reserve(MmapSize))
     {
-        if (mmap_ == MAP_FAILED)
-            __failure("mmap");
         bitmap_ = (detail::atomic_bitset<Capacity>*)align<PageSize>(mmap_);
         range_.store(Capacity, std::memory_order_relaxed);
+    }
+
+    ~elastic_atomic_bitset_heap() {
+        detail::memory::free(mmap_, MmapSize);
     }
 
     void push(T value) {

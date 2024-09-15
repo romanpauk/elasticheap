@@ -328,15 +328,13 @@ template< typename T, std::size_t Size, std::size_t PageSize > struct descriptor
     static constexpr std::size_t MmapSize = (sizeof(T) * Size + PageSize - 1) & ~(PageSize - 1);
 
     descriptor_manager()
-        : mmap_(mmap(0, MmapSize, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0))
+        : mmap_(detail::memory::reserve(MmapSize))
         , values_(align<PageSize>(mmap_))
     {
-        if (mmap_ == MAP_FAILED)
-            __failure("mmap");
     }
 
     ~descriptor_manager() {
-        munmap(mmap_, MmapSize);
+        detail::memory::free(mmap_, MmapSize);
     }
 
     T* allocate_descriptor(std::size_t i) {
@@ -372,15 +370,12 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
     page_manager()
         : deallocated_pages_()
     {
-        mmap_ = (uint8_t*)mmap(0, MmapSize, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (mmap_ == MAP_FAILED)
-            __failure("mmap");
-
+        mmap_ = (uint8_t*)detail::memory::reserve(MmapSize);
         memory_ = align<PageSize>(mmap_);
     }
 
     ~page_manager() {
-        munmap(mmap_, MmapSize);
+        detail::memory::free(mmap_, MmapSize);
     }
 
     void* allocate_page() {
@@ -397,7 +392,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
         }
 
         assert(is_page_valid(ptr));
-        mprotect(ptr, PageSize, PROT_READ | PROT_WRITE);
+        detail::memory::commit(ptr, PageSize);
     #if defined(STATS)
         ++stats.pages_allocated;
     #endif
@@ -408,8 +403,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
         assert(is_page_valid(ptr));
         assert(!is_page_deallocated(ptr));
 
-        if (mmap(ptr, PageSize, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == MAP_FAILED)
-            __failure("mmap");
+        detail::memory::decommit(ptr, PageSize);
 
         deallocated_pages_.push(get_page_index(ptr));
     #if defined(STATS)

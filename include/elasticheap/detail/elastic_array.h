@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <elasticheap/detail/memory.h>
 #include <elasticheap/detail/utils.h>
 
 #include <array>
@@ -36,8 +37,7 @@ template< typename T, std::size_t Size, std::size_t PageSize > struct elastic_ar
         assert(i < Size);
         if (page_refs_[page(i)]++ == 0) {
             auto ptr = &memory_[i];
-            if (mprotect(mask<PageSize>(&memory_[i]), PageSize, PROT_READ | PROT_WRITE) != 0)
-                __failure("mprotect");
+            detail::memory::commit(mask<PageSize>(&memory_[i]), PageSize);
         }
 
         return &memory_[i];
@@ -52,8 +52,7 @@ template< typename T, std::size_t Size, std::size_t PageSize > struct elastic_ar
         assert(page_refs_[page(i)] > 0);
         if (--page_refs_[page(i)] == 0) {
             auto ptr = mask<PageSize>(&memory_[i]);
-            if (mmap(mask<PageSize>(&memory_[i]), PageSize, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == MAP_FAILED)
-                __failure("mmap");
+            detail::memory::decommit(mask<PageSize>(&memory_[i]), PageSize);
         }
     }
 

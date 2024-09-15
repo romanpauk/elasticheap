@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <elasticheap/detail/memory.h>
 #include <elasticheap/detail/utils.h>
 
 #include <array>
@@ -44,8 +45,7 @@ template< std::size_t SizeofT, std::size_t PageCount, std::size_t PageSize > str
             std::lock_guard< std::mutex > lock(locks_[page]);
             state = counter.load(std::memory_order_relaxed);
             if (!(state & CounterMappedBit)) {
-                if (mprotect(mask<PageSize>(memory), PageSize, PROT_READ | PROT_WRITE) != 0)
-                    __failure("mprotect");
+                detail::memory::commit(mask<PageSize>(memory), PageSize);
                 counter.fetch_or(CounterMappedBit, std::memory_order_relaxed);
             }
         }
@@ -60,8 +60,7 @@ template< std::size_t SizeofT, std::size_t PageCount, std::size_t PageSize > str
             std::lock_guard< std::mutex > lock(locks_[page]);
             state = counter.load(std::memory_order_relaxed);
             if ((state & ~CounterMappedBit) == 0) {
-                if (mmap(mask<PageSize>(memory), PageSize, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == MAP_FAILED)
-                    __failure("mmap");
+                detail::memory::decommit(mask<PageSize>(memory), PageSize);
                 counter.fetch_and(static_cast<counter_type>(~CounterMappedBit), std::memory_order_relaxed);
             }
         }
