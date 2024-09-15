@@ -42,9 +42,10 @@ template< typename T, std::size_t Capacity, std::size_t PageSize > struct elasti
 
         storage_.acquire(page(value), (uint8_t*)bitmap_ + page(value) * PageSize);
 
-        // TODO: thread safety, check that set succeeded and if not, release
-        assert(!bitmap_->get(value));
-        bitmap_->set(value);
+        if (!bitmap_->set(value)) {
+            storage_.release(page(value), (uint8_t*)bitmap_ + page(value) * PageSize);
+            return;
+        }
 
         auto r = range_.load(std::memory_order_acquire);
         while(true) {

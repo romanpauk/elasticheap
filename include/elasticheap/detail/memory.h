@@ -12,6 +12,7 @@
 #include <sys/mman.h>
 
 namespace elasticheap::detail {
+    // TOOD: handle allocation errors on upper layer
     struct memory {
         static void* reserve(std::size_t size) {
             void* p = mmap(0, size, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
@@ -27,7 +28,9 @@ namespace elasticheap::detail {
         }
 
         static bool decommit(void* ptr, std::size_t size) {
-            //madvise(ptr, size, MADV_DONTNEED);
+            madvise(ptr, size, MADV_DONTNEED);
+            return true;
+
             void* p = mmap(ptr, size, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
             if (p == MAP_FAILED)
                 __failure("mmap");

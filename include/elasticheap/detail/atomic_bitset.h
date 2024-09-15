@@ -40,20 +40,22 @@ namespace elasticheap::detail {
             std::atomic_thread_fence(order);
         }
 
-        void set(std::size_t index, std::memory_order order = std::memory_order_relaxed) {
+        bool set(std::size_t index, std::memory_order order = std::memory_order_relaxed) {
             assert(index < Bits);
-            values_[index/sizeof(T)/8].fetch_or(T{1} << (index & (sizeof(T) * 8 - 1)), order);
+            auto value = T{1} << (index & (sizeof(T) * 8 - 1));
+            return (values_[index/sizeof(T)/8].fetch_or(value, order) & value) == 0;
         }
 
         bool clear(std::size_t index, std::memory_order order = std::memory_order_relaxed) {
             assert(index < Bits);
-            return values_[index/sizeof(T)/8].fetch_and(~(T{1} << (index & (sizeof(T) * 8 - 1))), order) &
-                (T{1} << (index & (sizeof(T) * 8 - 1)));
+            auto value = T{1} << (index & (sizeof(T) * 8 - 1));
+            return values_[index/sizeof(T)/8].fetch_and(~value, order) & value;
         }
 
         bool get(std::size_t index, std::memory_order order = std::memory_order_relaxed) const {
             assert(index < Bits);
-            return values_[index/sizeof(T)/8].load(order) & (T{1} << (index & (sizeof(T) * 8 - 1)));
+            auto value = T{1} << (index & (sizeof(T) * 8 - 1));
+            return values_[index/sizeof(T)/8].load(order) & value;
         }
 
         bool empty(std::memory_order order = std::memory_order_relaxed) const {
