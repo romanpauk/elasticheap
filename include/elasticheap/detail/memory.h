@@ -28,12 +28,16 @@ namespace elasticheap::detail {
         }
 
         static bool decommit(void* ptr, std::size_t size) {
-            madvise(ptr, size, MADV_DONTNEED);
-            return true;
-
+        #if defined(__linux__)
+            if (madvise(ptr, size, MADV_DONTNEED) == -1)
+                __failure("madvise");
+            //if (mprotect(ptr, size, PROT_READ) == -1)
+            //    __failure("mprotect");
+        #else
             void* p = mmap(ptr, size, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
             if (p == MAP_FAILED)
                 __failure("mmap");
+        #endif
             return true;
         }
 
