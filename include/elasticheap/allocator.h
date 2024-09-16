@@ -669,6 +669,24 @@ protected:
     template< size_t SizeClass > void deallocate_impl(void* ptr) noexcept {
         auto* desc = get_descriptor<SizeClass>(ptr);
 
+        // TODO: local deallocation
+        //  if (desc->thread_id_ == thread_id()) {
+        //      auto size = desc->deallocate_local();
+        //      auto state = desc->state_.load(std::memory_order_relaxed);
+        //      if (!(state & DescriptorUncached))
+        //          return;
+        //
+        //      if (size == 0) {
+        //          deallocate_descriptor<SizeClass>(desc);
+        //          return;
+        //      }
+        //
+        //      // TODO: local flow works only for cached descriptors
+        //      // Problem is that the correct size is unknown, so it is not
+        //      // clear if to push or what.
+        //      // Idea: descriptor will have one size atomic, other local
+        //  }
+
         auto size = desc->deallocate(ptr);
         if (desc->state_.load(std::memory_order_acquire) != DescriptorUncached)
             return;
