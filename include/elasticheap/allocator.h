@@ -508,7 +508,7 @@ protected:
         // Descriptor can be destroyed now or going through destruction.
         // Try to deallocate it, if it fails, it means other threads have
         // not yet come to a deallocation phase.
-        if (desc->size() == desc->capacity()) {
+        if (__unlikely(desc->size() == desc->capacity())) {
             deallocate_descriptor<SizeClass>(desc);
         }
 
@@ -529,10 +529,10 @@ protected:
         // After size goes to 0, descriptor can be deallocated/reused at any time
         // Carefully use version to not modify it.
 
-        if (!(state & DescriptorUncached))
+        if (__likely(!(state & DescriptorUncached)))
             return;
 
-        if (!(state & DescriptorQueued)) {
+        if (__unlikely(!(state & DescriptorQueued))) {
             if (update_state(desc, state, DescriptorQueued)) {
                 push_descriptor<SizeClass>(desc);
             }
@@ -540,7 +540,7 @@ protected:
 
         // If the descriptor is reused/deallocated, this will either be a valid
         // destruction request, or no-op due to erase() in deallocate.
-        if (desc->size() == desc->capacity()) {
+        if (__unlikely(desc->size() == desc->capacity())) {
             deallocate_descriptor<SizeClass>(desc);
         }
     }
@@ -592,13 +592,10 @@ protected:
     }
 
     template< size_t SizeClass > void push_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
-        (void)desc;
         auto size = size_class_offset(SizeClass);
         assert(get_cached_descriptor<SizeClass>() != desc);
-        // TODO: a case where descriptor is in a heap, but we cross the size - 1
-        // TODO: not thread-safe
-        if (!size_classes_[size].get(descriptor_manager_.get_descriptor_index(desc)))
-            size_classes_[size].push(descriptor_manager_.get_descriptor_index(desc));
+        assert(!size_classes_[size].get(descriptor_manager_.get_descriptor_index(desc)));
+        size_classes_[size].push(descriptor_manager_.get_descriptor_index(desc));
     }
 
     template< size_t SizeClass > void deallocate_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
