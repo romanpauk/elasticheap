@@ -24,7 +24,6 @@
 #include <sys/mman.h>
 
 //#define STATS
-#define THREADS
 #define MAGIC
 
 namespace elasticheap {
@@ -42,12 +41,10 @@ namespace elasticheap {
     }
 #endif
 
-#if defined(THREADS)
 static thread_local uint64_t thread_token;
 inline uint64_t thread_id() {
     return (uint64_t)&thread_token;
 }
-#endif
 
 //
 // Freelists:
@@ -243,59 +240,91 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
     static constexpr std::size_t Capacity = ArenaSize/SizeClass;
 
     arena_descriptor(void* buffer) {
-    #if defined(THREADS)
-        tid_ = thread_id();
-    #endif
+        thread_id_ = thread_id();
         begin_ = (uint8_t*)buffer;
         size_class_ = SizeClass;
-        free_list_size_ = 0;
-        for(int i = Capacity - 1; i >= 0; --i) {
-            free_list_.push(i, free_list_size_);
-        }
+
+        local_size_ = Capacity;
+        local_size_atomic_.store(Capacity, std::memory_order_relaxed);
+
+        for (size_t i = 0; i < Capacity; ++i)
+            local_list_[i] = i;
+
+        shared_size_.store(0, std::memory_order_relaxed);
     }
 
-    //using free_list_type = arena_free_list< uint16_t, Capacity >;
-    using free_list_type = arena_free_list2< uint16_t, Capacity >;
-    //using free_list_type = arena_free_list3< uint16_t, Capacity >;
-    //using free_list_type = arena_free_list4< uint16_t, Capacity >;
-    //using free_list_type = arena_free_list5< uint16_t, Capacity >;
-
-    void* allocate() {
+    void* allocate_local() {
     #if defined(MAGIC)
         assert(magic_ == 0xDEADBEEF);
     #endif
+        assert(thread_id_ == thread_id());
         assert(size_class_ == SizeClass);
-        uint16_t index = free_list_.pop(free_list_size_);
+        uint16_t index = local_list_[--local_size_];
         assert(index < Capacity);
         uint8_t* ptr = begin_ + index * SizeClass;
         assert(is_ptr_valid(ptr));
+        local_size_atomic_.store(local_size_, std::memory_order_release);
         return ptr;
     }
 
-    std::size_t deallocate(void* ptr) {
+    void deallocate_local(void* ptr) {
     #if defined(MAGIC)
         assert(magic_ == 0xDEADBEEF);
     #endif
-    #if defined(THREADS)
-        assert(tid_ == thread_id());
-    #endif
+        assert(thread_id_ == thread_id());
         assert(size_class_ == SizeClass);
         assert(is_ptr_valid(ptr));
         size_t index = ((uint8_t*)ptr - begin_) / SizeClass;
-        free_list_.push(index, free_list_size_);
-        return size(); // TODO: for MT, this needs to be atomic
+        assert(index < Capacity);
+
+        local_list_[local_size_++] = index;
+        local_size_atomic_.store(local_size_, std::memory_order_release);
+    }
+
+    void* allocate_shared() {
+    #if defined(MAGIC)
+        assert(magic_ == 0xDEADBEEF);
+    #endif
+        size_t index = 0; //shared_bitset_.pop_first();
+        assert(index < Capacity);
+        void* ptr = begin_ + index * SizeClass;
+        shared_size_.fetch_sub(1, std::memory_order_release);
+        return ptr;
+    }
+
+    void deallocate_shared(void* ptr) {
+    #if defined(MAGIC)
+        assert(magic_ == 0xDEADBEEF);
+    #endif
+        assert(thread_id_ != thread_id());
+        assert(size_class_ == SizeClass);
+        assert(is_ptr_valid(ptr));
+        size_t index = ((uint8_t*)ptr - begin_) / SizeClass;
+        assert(index < Capacity);
+
+        shared_bitset_.set(index);
+        shared_size_.fetch_add(1, std::memory_order_release);
     }
 
     static constexpr std::size_t capacity() { return Capacity; }
 
-    std::size_t size() { return Capacity - free_list_size_; }
+    std::size_t size_local() const {
+        return Capacity - local_size_;
+    }
+
+    std::size_t size_shared() const {
+        return Capacity - shared_size_.load(std::memory_order_acquire);
+    }
+
+    std::size_t size() const {
+        return Capacity
+            - local_size_atomic_.load(std::memory_order_acquire)
+            - shared_size_.load(std::memory_order_acquire);
+    }
 
     uint8_t* begin() { return begin_; }
     uint8_t* end() { return begin_ + ArenaSize; }
 
-    // TODO: local and shared free lists, size, empty etc
-    // We will allocate until there is something in local or shared free list
-    //
     bool is_ptr_valid(void* ptr) {
         assert(is_ptr_in_range(ptr, SizeClass, begin(), end()));
         assert(is_ptr_aligned(ptr, Alignment));
@@ -305,17 +334,19 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
 #if defined(MAGIC)
     uint32_t magic_ = 0xDEADBEEF;
 #endif
-#if defined(THREADS)
-    uint64_t tid_;
-#endif
+    uint64_t thread_id_;
 
     uint8_t* begin_;
     uint32_t size_class_;
-    uint32_t free_list_size_;
 
     std::atomic<uint64_t> state_;
 
-    free_list_type free_list_;
+    uint32_t local_size_;
+    std::atomic<uint64_t> local_size_atomic_;
+    std::array< uint16_t, Capacity > local_list_;
+
+    std::atomic<uint64_t> shared_size_;
+    detail::atomic_bitset< round_up(Capacity) > shared_bitset_;
 };
 
 // TODO: this is somehow useless class
@@ -611,57 +642,20 @@ protected:
         }
     }
 
-    //
-    // Descriptor state tracking:
-    //  Single thread allocates
-    //  Multiple threads deallocate
-    //
-    //  To deallocate/reuse descriptor, it has to be
-    //      uncached, pushed and erased
-    //
-    //  allocate():
-    //      if not full
-    //          return alloc()
-    //      set uncached
-    //      if size == 0
-    //          erase() && destroy
-    //
-    //  deallocate():
-    //      if TLS
-    //          if fully locally empty
-    //              destroy
-    //
-    //      size = dealloc()
-    //      if not uncached
-    //          return
-    //
-    //      if size = N - 1
-    //          push()
-    //          if size() == 0
-    //              erase() && destroy
-    //
-    //      if size == 0
-    //          erase() && destroy
-    //
-    //
-
     template< size_t SizeClass > void* allocate_impl() {
     again:
         auto* desc = get_cached_descriptor<SizeClass>();
-        /*
-        if (__likely(!desc->empty_local()) {
+
+        if (__likely(desc->size_local() < desc->capacity()))
             return desc->allocate_local();
-     }
 
-        if (__likely(!desc->empty_global()) {
-            return desc->allocate_global();
+        if (__likely(desc->size_shared() < desc->capacity()))
+            return desc->allocate_shared();
+
+        desc->state_.store(DescriptorUncached, std::memory_order_relaxed);
+        if (desc->size() == 0) {
+            deallocate_descriptor<SizeClass>(desc);
         }
-        */
-
-        if (__likely(desc->size() < desc->capacity()))
-            return desc->allocate();
-
-        desc->state_.store(DescriptorUncached, std::memory_order_release);
 
         reset_cached_descriptor<SizeClass>();
         goto again;
@@ -669,56 +663,12 @@ protected:
 
     template< size_t SizeClass > void deallocate_impl(void* ptr) noexcept {
         auto* desc = get_descriptor<SizeClass>(ptr);
+        if (desc->thread_id_ == thread_id()) {
+            desc->deallocate_local(ptr);
+        } else {
+            desc->deallocate_shared(ptr);
+        }
 
-        // TODO: local deallocation
-        //  if (desc->thread_id_ == thread_id()) {
-        //      auto size = desc->deallocate_local();
-        //      auto state = desc->state_.load(std::memory_order_relaxed);
-        //      if (!(state & DescriptorUncached))
-        //          return;
-        //
-        //      // TODO: update state if empty
-        //      if (!(state & DescriptorQueued)) {
-        //          // Make sure there is only one push
-        //          if ((desc->state_.fetch_and(DescriptorQueued) & DescriptorQueued) == 0) {
-        //              push_descriptor<SizeClass>(desc);
-        //              //if (size() == 0) {  // TODO: global, atomic size
-        //              //    deallocate_descriptor<SizeClass>(desc);
-        //              //    return;
-        //              //}
-        //          }
-        //      }
-        //
-        //      if (size == 0) {
-        //          deallocate_descriptor<SizeClass>(desc);
-        //          return;
-        //      }
-        //
-        //      //
-        //      // TODO: local flow works only for cached descriptors
-        //      // Problem is that the correct size is unknown, so it is not
-        //      // clear if to push or what.
-        //      // Idea: descriptor will have one size atomic, other local
-        //      //      That is bad idea as it is slow!!!
-        //      // Idea 2: we will use state, not size(), to do the push - should work
-        //      //      But how to determine that desc can be deallocated?
-        //      //      Local deallocations can synchronize with shared ones
-        //      //      Shared deallocations can't...
-        //      //
-        //      //  Descriptor fully deallocated
-        //      //      - locally - will destroy immediately
-        //      //      - shared - will destroy immediately
-        //      //      - shared first, local last - will destroy immediatelly
-        //      //      - locally first, shared last - shared destruction might not see
-        //      //          that locally, it is also cleared
-        //      //          this will stay in the heap until pop()ed for reuse
-        //      //          if owning thread should be the one to deallocate this, it should do it
-        //      //              on every allocate/deallocate call
-        //      //
-        //      //
-        //  }
-
-        auto size = desc->deallocate(ptr);
         auto state = desc->state_.load(std::memory_order_acquire);
         if (state != DescriptorUncached)
             return;
@@ -817,7 +767,7 @@ protected:
             auto& pdesc = segment_manager_.get_page_descriptor(page);
             int pindex = ((uint8_t*)segment - (uint8_t*)page)/ArenaSize;
 
-            return pdesc.bitmap.get(pindex) && desc->size_class_ == SizeClass && desc->tid_ == thread_id();
+            return pdesc.bitmap.get(pindex) && desc->size_class_ == SizeClass && desc->thread_id_ == thread_id();
         }
         return false;
     }
