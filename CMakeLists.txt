@@ -79,7 +79,6 @@ target_sources(elasticheap INTERFACE
 if(ELASTICHEAP_ENABLE_BENCHMARK)
     add_executable(elasticheap_benchmark
         benchmark/allocator.cpp
-        benchmark/arena_free_list.cpp
         benchmark/bitset.cpp
         benchmark/bitset_heap.cpp
         benchmark/main.cpp
