@@ -306,6 +306,9 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
     uint8_t* begin() { return begin_; }
     uint8_t* end() { return begin_ + ArenaSize; }
 
+    // TODO: local and shared free lists, size, empty etc
+    // We will allocate until there is something in local or shared free list
+    //
 private:
     bool is_ptr_valid(void* ptr) {
         assert(is_ptr_in_range(ptr, SizeClass, begin(), end()));
@@ -650,7 +653,7 @@ protected:
         /*
         if (__likely(!desc->empty_local()) {
             return desc->allocate_local();
-        }
+     }
 
         if (__likely(!desc->empty_global()) {
             return desc->allocate_global();
@@ -676,15 +679,45 @@ protected:
         //      if (!(state & DescriptorUncached))
         //          return;
         //
+        //      // TODO: update state if empty
+        //      if (!(state & DescriptorQueued)) {
+        //          // Make sure there is only one push
+        //          if ((desc->state_.fetch_and(DescriptorQueued) & DescriptorQueued) == 0) {
+        //              push_descriptor<SizeClass>(desc);
+        //              //if (size() == 0) {  // TODO: global, atomic size
+        //              //    deallocate_descriptor<SizeClass>(desc);
+        //              //    return;
+        //              //}
+        //          }
+        //      }
+        //
         //      if (size == 0) {
         //          deallocate_descriptor<SizeClass>(desc);
         //          return;
         //      }
         //
+        //      //
         //      // TODO: local flow works only for cached descriptors
         //      // Problem is that the correct size is unknown, so it is not
         //      // clear if to push or what.
         //      // Idea: descriptor will have one size atomic, other local
+        //      //      That is bad idea as it is slow!!!
+        //      // Idea 2: we will use state, not size(), to do the push - should work
+        //      //      But how to determine that desc can be deallocated?
+        //      //      Local deallocations can synchronize with shared ones
+        //      //      Shared deallocations can't...
+        //      //
+        //      //  Descriptor fully deallocated
+        //      //      - locally - will destroy immediately
+        //      //      - shared - will destroy immediately
+        //      //      - shared first, local last - will destroy immediatelly
+        //      //      - locally first, shared last - shared destruction might not see
+        //      //          that locally, it is also cleared
+        //      //          this will stay in the heap until pop()ed for reuse
+        //      //          if owning thread should be the one to deallocate this, it should do it
+        //      //              on every allocate/deallocate call
+        //      //
+        //      //
         //  }
 
         auto size = desc->deallocate(ptr);
