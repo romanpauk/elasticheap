@@ -652,7 +652,12 @@ protected:
         if (__likely(desc->size_shared() < desc->capacity()))
             return desc->allocate_shared();
 
+        // Descriptor can't be destroyed before getting uncached
         desc->state_.store(DescriptorUncached, std::memory_order_relaxed);
+
+        // Descriptor can be destroyed now or going through destruction.
+        // Try to deallocate it, if it fails, it means other threads
+        // will yet have to attempt to deallocate it.
         if (desc->size() == 0) {
             deallocate_descriptor<SizeClass>(desc);
         }
@@ -663,17 +668,19 @@ protected:
 
     template< size_t SizeClass > void deallocate_impl(void* ptr) noexcept {
         auto* desc = get_descriptor<SizeClass>(ptr);
+        auto state = desc->state_.load(std::memory_order_acquire);
+
         if (desc->thread_id_ == thread_id()) {
             desc->deallocate_local(ptr);
         } else {
             desc->deallocate_shared(ptr);
         }
 
-        auto state = desc->state_.load(std::memory_order_acquire);
         if (state != DescriptorUncached)
             return;
 
         if (!(state & DescriptorQueued)) {
+            // TODO: this needs to be versioned CAS so we do not write to unmapped descriptor
             if ((desc->state_.fetch_add(DescriptorQueued, std::memory_order_relaxed) & DescriptorQueued) == 0) {
                 push_descriptor<SizeClass>(desc);
             }
