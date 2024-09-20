@@ -309,17 +309,16 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
     static constexpr std::size_t capacity() { return Capacity; }
 
     std::size_t size_local() const {
-        return Capacity - local_size_;
+        return local_size_;
     }
 
     std::size_t size_shared() const {
-        return Capacity - shared_size_.load(std::memory_order_acquire);
+        return shared_size_.load(std::memory_order_acquire);
     }
 
     std::size_t size() const {
-        return Capacity
-            - local_size_atomic_.load(std::memory_order_acquire)
-            - shared_size_.load(std::memory_order_acquire);
+        return local_size_atomic_.load(std::memory_order_acquire)
+            + shared_size_.load(std::memory_order_acquire);
     }
 
     uint8_t* begin() { return begin_; }
@@ -646,19 +645,20 @@ protected:
     again:
         auto* desc = get_cached_descriptor<SizeClass>();
 
-        if (__likely(desc->size_local() < desc->capacity()))
+        if (__likely(desc->size_local()))
             return desc->allocate_local();
 
-        if (__likely(desc->size_shared() < desc->capacity()))
-            return desc->allocate_shared();
+        //if (__likely(desc->size_shared()))
+        //    return desc->allocate_shared();
 
         // Descriptor can't be destroyed before getting uncached
-        desc->state_.store(DescriptorUncached, std::memory_order_relaxed);
+        //auto version = version_.fetch_add(1) << 8;
+        desc->state_.store(DescriptorUncached, std::memory_order_release);
 
         // Descriptor can be destroyed now or going through destruction.
         // Try to deallocate it, if it fails, it means other threads
         // will yet have to attempt to deallocate it.
-        if (desc->size() == 0) {
+        if (desc->size() == desc->capacity()) {
             deallocate_descriptor<SizeClass>(desc);
         }
 
@@ -676,17 +676,17 @@ protected:
             desc->deallocate_shared(ptr);
         }
 
-        if (state != DescriptorUncached)
+        if (!(state & DescriptorUncached))
             return;
 
         if (!(state & DescriptorQueued)) {
-            // TODO: this needs to be versioned CAS so we do not write to unmapped descriptor
-            if ((desc->state_.fetch_add(DescriptorQueued, std::memory_order_relaxed) & DescriptorQueued) == 0) {
+            // TODO: this needs to be versioned CAS so we do not write to unmapped or reused descriptor
+            if ((desc->state_.fetch_or(DescriptorQueued, std::memory_order_release) & DescriptorQueued) == 0) {
                 push_descriptor<SizeClass>(desc);
             }
         }
 
-        if (desc->size() == 0) {
+        if (desc->size() == desc->capacity()) {
             deallocate_descriptor<SizeClass>(desc);
         }
     }
@@ -755,9 +755,11 @@ protected:
         if (size_classes_[size_class_offset(SizeClass)].erase(descriptor_manager_.get_descriptor_index(desc))) {
             // RACE: the descriptor might be reused and thus, erased by accident
             // If it become empty during time it was erased, put it back and retry.
-            if (desc->size()) {
+            //
+            // Need a version here as it can be reused descriptor with different capacity...
+            if (desc->size() < desc->capacity()) {
                 push_descriptor<SizeClass>(desc);
-                if (desc->size() == 0)
+                if (desc->size() == desc->capacity())
                     goto again;
             }
 
@@ -787,6 +789,7 @@ protected:
 
     // Global
     static descriptor_manager<std::array<uint8_t, DescriptorSize >, MaxSize / ArenaSize, PageSize> descriptor_manager_;
+    static std::atomic< uint64_t > version_;
 
     // Local
     static segment_manager<PageSize, ArenaSize, MaxSize> segment_manager_;
@@ -798,6 +801,8 @@ protected:
 };
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> segment_manager<PageSize, ArenaSize, MaxSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::segment_manager_;
+
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::atomic< uint64_t > arena_allocator_base<PageSize, ArenaSize, MaxSize>::version_;
 
 template < std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> descriptor_manager<std::array<uint8_t, DescriptorSize>, MaxSize / ArenaSize, PageSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::descriptor_manager_;
 
