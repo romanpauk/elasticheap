@@ -236,23 +236,9 @@ enum {
     DescriptorUncached = 2,
 };
 
-struct arena_descriptor_base {
-#if defined(MAGIC)
-    uint32_t magic_ = 0xDEADBEEF;
-#endif
-#if defined(THREADS)
-    uint64_t tid_;
-#endif
-    uint8_t* begin_;
-    uint32_t size_class_;
-    uint32_t free_list_size_;
-
-    std::atomic<uint64_t> state_;
-};
-
 static constexpr std::size_t DescriptorSize = 1<<16;
 
-template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 8 > struct arena_descriptor: arena_descriptor_base {
+template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 8 > struct arena_descriptor {
     static constexpr std::size_t Capacity = ArenaSize/SizeClass;
 
     arena_descriptor(void* buffer) {
@@ -309,15 +295,26 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
     // TODO: local and shared free lists, size, empty etc
     // We will allocate until there is something in local or shared free list
     //
-private:
     bool is_ptr_valid(void* ptr) {
         assert(is_ptr_in_range(ptr, SizeClass, begin(), end()));
         assert(is_ptr_aligned(ptr, Alignment));
         return true;
     }
 
+#if defined(MAGIC)
+    uint32_t magic_ = 0xDEADBEEF;
+#endif
+#if defined(THREADS)
+    uint64_t tid_;
+#endif
+
+    uint8_t* begin_;
+    uint32_t size_class_;
+    uint32_t free_list_size_;
+
+    std::atomic<uint64_t> state_;
+
     free_list_type free_list_;
-    static_assert(sizeof(free_list_type) + sizeof(arena_descriptor_base) <= DescriptorSize);
 };
 
 // TODO: this is somehow useless class
@@ -784,6 +781,7 @@ protected:
         auto size = size_class_offset(SizeClass);
         void* buffer = segment_manager_.allocate_segment();
         auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.allocate_descriptor(segment_manager_.get_segment_index(buffer));
+        static_assert(sizeof(arena_descriptor<ArenaSize, SizeClass>) <= DescriptorSize);
         new(desc) arena_descriptor< ArenaSize, SizeClass >(buffer);
         return desc;
     }
@@ -842,7 +840,7 @@ protected:
     // Local
     static std::array< detail::elastic_atomic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> size_classes_;
     // Thread-local
-    static std::array<arena_descriptor_base*, 23> size_class_cache_;
+    static std::array<void*, 23> size_class_cache_;
 };
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> segment_manager<PageSize, ArenaSize, MaxSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::segment_manager_;
@@ -851,7 +849,7 @@ template < std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> des
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array< detail::elastic_atomic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_classes_;
 
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<arena_descriptor_base*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_class_cache_;
+template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<void*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_class_cache_;
 
 template <typename T > class allocator
     : public arena_allocator_base< 1<<21, 1<<17, 1ull<<40 >
