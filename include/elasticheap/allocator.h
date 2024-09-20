@@ -599,6 +599,37 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > cla
 
     static constexpr std::size_t PageArenaCount = (PageSize)/(ArenaSize);
 
+    static uint64_t get_version() {
+        return version_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    static uint64_t get_version(uint64_t state) {
+        return state >> 8;
+    }
+
+    static uint64_t make_state(uint64_t version, uint64_t state) {
+        assert(state <= 0xFF);
+        return (version << 8) | state;
+    }
+
+    template< typename T > static bool update_state(T* desc, uint64_t state, uint64_t update) {
+        const auto version = get_version(state);
+        for(;;) {
+            assert(!(state & update));
+
+            if (desc->state_.compare_exchange_strong(state, state | update, std::memory_order_release))
+                return true;
+
+            // If descriptor got reused, bail out
+            if (get_version(state) != version)
+                return false;
+
+            // If someone else did the update, bail out
+            if (state & update)
+                return false;
+        }
+    }
+
 protected:
     static constexpr size_t log2(size_t n) { return ((n<2) ? 1 : 1 + log2(n/2)); }
 
@@ -652,12 +683,12 @@ protected:
         //    return desc->allocate_shared();
 
         // Descriptor can't be destroyed before getting uncached
-        //auto version = version_.fetch_add(1) << 8;
-        desc->state_.store(DescriptorUncached, std::memory_order_release);
+        auto version = get_version();
+        desc->state_.store(make_state(version, DescriptorCached | DescriptorUncached), std::memory_order_release);
 
         // Descriptor can be destroyed now or going through destruction.
-        // Try to deallocate it, if it fails, it means other threads
-        // will yet have to attempt to deallocate it.
+        // Try to deallocate it, if it fails, it means other threads have
+        // not yet come to a deallocation phase.
         if (desc->size() == desc->capacity()) {
             deallocate_descriptor<SizeClass>(desc);
         }
@@ -676,16 +707,20 @@ protected:
             desc->deallocate_shared(ptr);
         }
 
+        // After size goes to 0, descriptor can be deallocated/reused at any time
+        // Carefully use version to not modify it.
+
         if (!(state & DescriptorUncached))
             return;
 
         if (!(state & DescriptorQueued)) {
-            // TODO: this needs to be versioned CAS so we do not write to unmapped or reused descriptor
-            if ((desc->state_.fetch_or(DescriptorQueued, std::memory_order_release) & DescriptorQueued) == 0) {
+            if (update_state(desc, state, DescriptorQueued)) {
                 push_descriptor<SizeClass>(desc);
             }
         }
 
+        // If the descriptor is reused/deallocated, this will either be a valid
+        // destruction request, or no-op due to erase() in deallocate.
         if (desc->size() == desc->capacity()) {
             deallocate_descriptor<SizeClass>(desc);
         }
@@ -753,10 +788,11 @@ protected:
     template< size_t SizeClass > void deallocate_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
     again:
         if (size_classes_[size_class_offset(SizeClass)].erase(descriptor_manager_.get_descriptor_index(desc))) {
-            // RACE: the descriptor might be reused and thus, erased by accident
+            // The descriptor might have been reused and thus, erased by accident
             // If it become empty during time it was erased, put it back and retry.
-            //
-            // Need a version here as it can be reused descriptor with different capacity...
+            // If it is not empty after erase, someone just allocated. As it was
+            // erased, it was not cached, put it back as it has to be the same size
+            // class, too.
             if (desc->size() < desc->capacity()) {
                 push_descriptor<SizeClass>(desc);
                 if (desc->size() == desc->capacity())
