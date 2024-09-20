@@ -745,17 +745,14 @@ protected:
         uint32_t index;
         while(size_classes_[size].pop(index)) {
             auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_descriptor(index);
-            // TODO: is validate still needed? I believe it was needed when descriptors
-            // were not erased before reusing
-            if ((validate_descriptor_state< SizeClass >(desc) && desc->size() != desc->capacity())) {
-                desc->state_.store(DescriptorCached, std::memory_order_release);
-                size_class_cache_[size] = desc;
-                return desc;
-            }
+            assert(desc->size());
+            desc->state_.store(DescriptorCached, std::memory_order_release);
+            size_class_cache_[size] = desc;
+            return desc;
         }
 
         auto* desc = allocate_descriptor<SizeClass>();
-        assert(desc->size() == 0);
+        assert(desc->size() == desc->capacity());
         desc->state_.store(DescriptorCached, std::memory_order_release);
         size_class_cache_[size] = desc;
         return desc;
@@ -802,19 +799,6 @@ protected:
             segment_manager_.deallocate_segment(desc->begin());
             descriptor_manager_.deallocate_descriptor(desc);
         }
-    }
-
-    template< std::size_t SizeClass > bool validate_descriptor_state(arena_descriptor<ArenaSize, SizeClass>* desc) {
-        auto index = descriptor_manager_.get_descriptor_index(desc);
-        auto* segment = segment_manager_.get_segment(index);
-        void* page = segment_manager_.get_page(segment);
-        if (!segment_manager_.is_page_deallocated(page)) {
-            auto& pdesc = segment_manager_.get_page_descriptor(page);
-            int pindex = ((uint8_t*)segment - (uint8_t*)page)/ArenaSize;
-
-            return pdesc.bitmap.get(pindex) && desc->size_class_ == SizeClass && desc->thread_id_ == thread_id();
-        }
-        return false;
     }
 
     // TOOD: use some more separated global/local state
