@@ -234,6 +234,7 @@ enum {
     DescriptorNone = 0,
     DescriptorCached = 1,
     DescriptorUncached = 2,
+    DescriptorQueued = 4,
 };
 
 static constexpr std::size_t DescriptorSize = 1<<16;
@@ -718,21 +719,17 @@ protected:
         //  }
 
         auto size = desc->deallocate(ptr);
-        if (desc->state_.load(std::memory_order_acquire) != DescriptorUncached)
+        auto state = desc->state_.load(std::memory_order_acquire);
+        if (state != DescriptorUncached)
             return;
 
-        if (size == desc->capacity() - 1) {
-            push_descriptor<SizeClass>(desc);
-            if (desc->size() == 0) {
-                // RACE: thread can be after push, other thread can reuse descriptor,
-                // fill it and push it again. Calling deallocate_descriptor() will than erase
-                // a wrong descriptor that is not empty. To avoid that, we would have to version
-                // the pushes but they are just a bits. Before deallocating, version can be read
-                // and checked after erase. Yet the race would have to be resolved by retry
-                // anyway.
-                deallocate_descriptor<SizeClass>(desc);
+        if (!(state & DescriptorQueued)) {
+            if ((desc->state_.fetch_add(DescriptorQueued, std::memory_order_relaxed) & DescriptorQueued) == 0) {
+                push_descriptor<SizeClass>(desc);
             }
-        } else if (size == 0) {
+        }
+
+        if (desc->size() == 0) {
             deallocate_descriptor<SizeClass>(desc);
         }
     }
