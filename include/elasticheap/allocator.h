@@ -62,7 +62,6 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
         thread_id_ = thread_id();
         begin_ = (uint8_t*)buffer;
         size_class_ = SizeClass;
-
         local_size_ = Capacity;
         local_size_atomic_.store(Capacity, std::memory_order_relaxed);
 
@@ -73,11 +72,7 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
     }
 
     void* allocate_local() {
-    #if defined(MAGIC)
-        assert(magic_ == 0xDEADBEEF);
-    #endif
-        assert(thread_id_ == thread_id());
-        assert(size_class_ == SizeClass);
+        assert(verify(thread_id()));
         uint16_t index = local_list_[--local_size_];
         assert(index < Capacity);
         uint8_t* ptr = begin_ + index * SizeClass;
@@ -87,24 +82,17 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
     }
 
     void deallocate_local(void* ptr) {
-    #if defined(MAGIC)
-        assert(magic_ == 0xDEADBEEF);
-    #endif
-        assert(thread_id_ == thread_id());
-        assert(size_class_ == SizeClass);
+        assert(verify(thread_id()));
         assert(is_ptr_valid(ptr));
         size_t index = ((uint8_t*)ptr - begin_) / SizeClass;
         assert(index < Capacity);
-
         local_list_[local_size_++] = index;
         local_size_atomic_.store(local_size_, std::memory_order_release);
     }
 
     void* allocate_shared() {
-    #if defined(MAGIC)
-        assert(magic_ == 0xDEADBEEF);
-    #endif
-        size_t index = 0; //shared_bitset_.pop_first();
+        assert(verify());
+        size_t index = shared_bitset_.pop_first();
         assert(index < Capacity);
         void* ptr = begin_ + index * SizeClass;
         shared_size_.fetch_sub(1, std::memory_order_release);
@@ -112,15 +100,11 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
     }
 
     void deallocate_shared(void* ptr) {
-    #if defined(MAGIC)
-        assert(magic_ == 0xDEADBEEF);
-    #endif
+        assert(verify());
         assert(thread_id_ != thread_id());
-        assert(size_class_ == SizeClass);
         assert(is_ptr_valid(ptr));
         size_t index = ((uint8_t*)ptr - begin_) / SizeClass;
         assert(index < Capacity);
-
         shared_bitset_.set(index);
         shared_size_.fetch_add(1, std::memory_order_release);
     }
@@ -146,6 +130,16 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
     bool is_ptr_valid(void* ptr) {
         assert(is_ptr_in_range(ptr, SizeClass, begin(), end()));
         assert(is_ptr_aligned(ptr, Alignment));
+        return true;
+    }
+
+    bool verify(std::size_t thread_id = 0) {
+    #if defined(MAGIC)
+        assert(magic_ == 0xDEADBEEF);
+    #endif
+        assert(size_class_ == SizeClass);
+        if (thread_id)
+            assert(thread_id_ == thread_id);
         return true;
     }
 
@@ -498,8 +492,8 @@ protected:
         if (__likely(desc->size_local()))
             return desc->allocate_local();
 
-        //if (__likely(desc->size_shared()))
-        //    return desc->allocate_shared();
+        if (__likely(desc->size_shared()))
+            return desc->allocate_shared();
 
         // Descriptor can't be destroyed before getting uncached
         auto version = get_version();

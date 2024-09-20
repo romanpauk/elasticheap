@@ -72,6 +72,18 @@ namespace elasticheap::detail {
             return true;
         }
 
+        std::size_t pop_first() {
+            for(std::size_t i = 0; i < Size; ++i) {
+                if (auto value = values_[i].load(std::memory_order_relaxed)) {
+                    auto count = _tzcnt_u64(value);
+                    // TODO
+                    if (clear(count + i * sizeof(T) * 8, std::memory_order_relaxed))
+                        return count + i * sizeof(T) * 8;
+                }
+            }
+            return Size;
+        }
+
     private:
         std::array< std::atomic<T>, Size > values_;
     };
