@@ -400,11 +400,9 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
     }
 
 private:
-    // Global
     page_manager< PageSize, MaxSize > page_manager_;
     descriptor_manager< page_descriptor, PageCount, MetadataPageSize > page_descriptors_;
 
-    // Local, but could also be Global.
     detail::elastic_atomic_bitset_heap< uint32_t, PageCount, MetadataPageSize > allocated_pages_;
 };
 
@@ -622,15 +620,16 @@ protected:
     //
 
     // Global
+    // TODO: descriptors waste a lot of space, need a few descriptor classes
     static descriptor_manager<std::array<uint8_t, DescriptorSize>, MaxSize / ArenaSize, PageSize> descriptor_manager_;
 
     // Global
     static std::atomic<uint64_t> version_;
 
-    // Local (can be gobal, but should be CPU-local)
+    // Global (should be CPU-local?)
     static segment_manager<PageSize, ArenaSize, MaxSize> segment_manager_;
 
-    // Local (can be global, but should be CPU-local)
+    // Global (should be CPU-local?)
     static std::array< detail::elastic_atomic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> size_classes_;
 
     // Thread-local

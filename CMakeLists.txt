@@ -76,6 +76,13 @@ target_sources(elasticheap INTERFACE
     README.md
 )
 
+add_library(libelasticheap
+    src/libelasticheap.cpp
+)
+target_link_libraries(libelasticheap elasticheap)
+set_target_properties(libelasticheap PROPERTIES PREFIX "")
+set_target_properties(libelasticheap PROPERTIES VERSION ${PROJECT_VERSION})
+
 if(ELASTICHEAP_ENABLE_BENCHMARK)
     add_executable(elasticheap_benchmark
         benchmark/allocator.cpp
