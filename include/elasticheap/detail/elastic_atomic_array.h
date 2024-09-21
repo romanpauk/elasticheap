@@ -21,7 +21,7 @@
 
 namespace elasticheap::detail {
 
-template< std::size_t SizeofT, std::size_t PageCount, std::size_t PageSize > struct elastic_storage {
+template< std::size_t SizeofT, std::size_t Size, std::size_t PageSize > struct elastic_storage {
 
     using counter_type =
         std::conditional_t< PageSize / SizeofT < std::numeric_limits<uint8_t>::max()  / 2, uint8_t,
@@ -30,9 +30,11 @@ template< std::size_t SizeofT, std::size_t PageCount, std::size_t PageSize > str
         uint64_t
     >>>;
 
+    static_assert(PageSize > SizeofT);
+    static_assert(PageSize % SizeofT == 0);
     static_assert(PageSize / SizeofT < std::numeric_limits<uint64_t>::max() / 2);
-
-    static constexpr counter_type CounterMappedBit = counter_type{1} << (sizeof(counter_type)*8 - 1);
+    static constexpr counter_type CounterMappedBit = counter_type{1} << (sizeof(counter_type) * 8 - 1);
+    static constexpr std::size_t PageCount = (SizeofT * Size + PageSize - 1) / PageSize;
 
     // TODO: this should use per-cpu locks
     std::array< std::mutex, PageCount > locks_;
@@ -110,7 +112,7 @@ private:
         return i * sizeof(T) / PageSize;
     }
 
-    elastic_storage< sizeof(T), PageCount, PageSize > storage_;
+    elastic_storage< sizeof(T), Size, PageSize > storage_;
     void* mmap_ = 0;
     T* memory_ = 0;
 };

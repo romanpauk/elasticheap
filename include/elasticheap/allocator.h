@@ -56,7 +56,7 @@ enum {
 static constexpr std::size_t DescriptorSize = 1<<16;
 
 // Freelist size:
-// (1<<17)/4*2 = 65535
+// (1<<17)/8*2 = 32768
 //
 template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 8 > struct arena_descriptor {
     static constexpr std::size_t Capacity = ArenaSize/SizeClass;
@@ -166,8 +166,6 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
 
 // TODO: this is somehow useless class
 template< typename T, std::size_t Size, std::size_t PageSize > struct descriptor_manager {
-    static_assert(PageSize > sizeof(T));
-    static_assert(PageSize % sizeof(T) == 0);
     static constexpr std::size_t MmapSize = (sizeof(T) * Size + PageSize - 1) & ~(PageSize - 1);
 
     descriptor_manager()
@@ -646,7 +644,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std:
 
 template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<void*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_class_cache_;
 
-template <typename T > class allocator
+template < typename T > class allocator
     : public arena_allocator_base< 1<<21, 1<<17, 1ull<<40 >
 {
     template <typename U> friend class allocator;

@@ -20,7 +20,6 @@ namespace elasticheap::detail {
 
 template< typename T, std::size_t Capacity, std::size_t PageSize > struct elastic_atomic_bitset_heap {
     static constexpr std::size_t MmapSize = sizeof(detail::atomic_bitset<Capacity>) + PageSize - 1;
-    static constexpr std::size_t PageCount = (Capacity + PageSize * 8 - 1) / (PageSize * 8);
 
     static_assert(Capacity <= std::numeric_limits<uint32_t>::max());
 
@@ -175,7 +174,7 @@ private:
         return ((uint64_t)max << 32) | min;
     }
 
-    detail::elastic_storage< sizeof(T), PageCount, PageSize > storage_;
+    detail::elastic_storage< sizeof(T), (Capacity + sizeof(T) * 8 - 1) / (sizeof(T) * 8), PageSize > storage_;
 
     uint8_t* mmap_;
     detail::atomic_bitset<Capacity>* bitmap_;
