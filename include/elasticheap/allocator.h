@@ -55,6 +55,9 @@ enum {
 
 static constexpr std::size_t DescriptorSize = 1<<16;
 
+// Freelist size:
+// (1<<17)/4*2 = 65535
+//
 template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 8 > struct arena_descriptor {
     static constexpr std::size_t Capacity = ArenaSize/SizeClass;
 
@@ -611,21 +614,25 @@ protected:
         }
     }
 
-    // TOOD: use some more separated global/local state
+    //
+    // TODO: use some more separated global/local state
     // Global       - shared
     // Local        - thread-local or cpu-local
     // Thread-local - thread-local
     //
 
     // Global
-    static descriptor_manager<std::array<uint8_t, DescriptorSize >, MaxSize / ArenaSize, PageSize> descriptor_manager_;
-    static std::atomic< uint64_t > version_;
+    static descriptor_manager<std::array<uint8_t, DescriptorSize>, MaxSize / ArenaSize, PageSize> descriptor_manager_;
 
-    // Local
+    // Global
+    static std::atomic<uint64_t> version_;
+
+    // Local (can be gobal, but should be CPU-local)
     static segment_manager<PageSize, ArenaSize, MaxSize> segment_manager_;
 
-    // Local
+    // Local (can be global, but should be CPU-local)
     static std::array< detail::elastic_atomic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> size_classes_;
+
     // Thread-local
     static std::array<void*, 23> size_class_cache_;
 };
