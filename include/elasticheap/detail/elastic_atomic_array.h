@@ -21,6 +21,12 @@
 
 namespace elasticheap::detail {
 
+//
+// Two cases:
+//
+// sizeof(T) >> PageSize    -   static_cast(sizeof(T) % PageSize == 0)
+// PageSize >> sizeof(T)    -   static_cast(PageSize % sizeof(T) == 0)
+//
 template< std::size_t SizeofT, std::size_t Size, std::size_t PageSize > struct elastic_storage {
 
     using counter_type =
@@ -30,11 +36,15 @@ template< std::size_t SizeofT, std::size_t Size, std::size_t PageSize > struct e
         uint64_t
     >>>;
 
-    static_assert(PageSize > SizeofT);
-    static_assert(PageSize % SizeofT == 0);
+    static_assert(
+        ((PageSize >= SizeofT) && ((PageSize % SizeofT)) == 0) ||
+        ((SizeofT >= PageSize) && ((SizeofT % PageSize)) == 0)
+    );
+
     static_assert(PageSize / SizeofT < std::numeric_limits<uint64_t>::max() / 2);
     static constexpr counter_type CounterMappedBit = counter_type{1} << (sizeof(counter_type) * 8 - 1);
     static constexpr std::size_t PageCount = (SizeofT * Size + PageSize - 1) / PageSize;
+    static constexpr std::size_t BlockSize = std::max(SizeofT, PageSize);
 
     // TODO: this should use per-cpu locks
     std::array< std::mutex, PageCount > locks_;
@@ -47,7 +57,7 @@ template< std::size_t SizeofT, std::size_t Size, std::size_t PageSize > struct e
             std::lock_guard< std::mutex > lock(locks_[page]);
             state = counter.load(std::memory_order_relaxed);
             if (!(state & CounterMappedBit)) {
-                detail::memory::commit(mask<PageSize>(memory), PageSize);
+                detail::memory::commit(mask<PageSize>(memory), BlockSize);
                 counter.fetch_or(CounterMappedBit, std::memory_order_relaxed);
             }
         }
@@ -62,7 +72,7 @@ template< std::size_t SizeofT, std::size_t Size, std::size_t PageSize > struct e
             std::lock_guard< std::mutex > lock(locks_[page]);
             state = counter.load(std::memory_order_relaxed);
             if ((state & ~CounterMappedBit) == 0) {
-                detail::memory::decommit(mask<PageSize>(memory), PageSize);
+                detail::memory::decommit(mask<PageSize>(memory), BlockSize);
                 counter.fetch_and(static_cast<counter_type>(~CounterMappedBit), std::memory_order_relaxed);
             }
         }
@@ -113,7 +123,6 @@ private:
     }
 
     elastic_storage< sizeof(T), Size, PageSize > storage_;
-    void* mmap_ = 0;
     T* memory_ = 0;
 };
 
