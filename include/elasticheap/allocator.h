@@ -55,29 +55,28 @@ enum {
 
 static constexpr std::size_t DescriptorSize = 1<<16;
 
-// Freelist size:
-// (1<<17)/8*2 = 32768
-//
 template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 8 > struct arena_descriptor {
-    static constexpr std::size_t Capacity = ArenaSize/SizeClass;
-
-    arena_descriptor(void* buffer) {
+    arena_descriptor(std::size_t capacity, std::size_t size_class, void* buffer, uint16_t* local_list, std::atomic<uint64_t>* shared_bitset) {
         thread_id_ = thread_id();
         begin_ = (uint8_t*)buffer;
         size_class_ = SizeClass;
-        local_size_ = Capacity;
-        local_size_atomic_.store(Capacity, std::memory_order_relaxed);
+        capacity_ = capacity;
+        local_size_ = capacity;
+        local_size_atomic_.store(capacity_, std::memory_order_relaxed);
+        local_list_ = local_list;
 
-        for (size_t i = 0; i < Capacity; ++i)
+        for (size_t i = 0; i < capacity_; ++i)
             local_list_[i] = i;
 
+        shared_bitset_ = shared_bitset;
         shared_size_.store(0, std::memory_order_relaxed);
+        // detail::atomic_bitset_view::clear(shared_bitset_, capacity_);
     }
 
     void* allocate_local() {
         assert(verify(thread_id()));
         uint16_t index = local_list_[--local_size_];
-        assert(index < Capacity);
+        assert(index < capacity_);
         uint8_t* ptr = begin_ + index * SizeClass;
         assert(is_ptr_valid(ptr));
         local_size_atomic_.store(local_size_, std::memory_order_release);
@@ -90,15 +89,15 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
         // TODO: this division is perf. sensitive. Can be replaced by shifts,
         // or multiplication
         size_t index = ((uint8_t*)ptr - begin_) / SizeClass;
-        assert(index < Capacity);
+        assert(index < capacity_);
         local_list_[local_size_++] = index;
         local_size_atomic_.store(local_size_, std::memory_order_release);
     }
 
     void* allocate_shared() {
         assert(verify());
-        size_t index = shared_bitset_.pop_first();
-        assert(index < Capacity);
+        size_t index = detail::atomic_bitset_view::pop_first(shared_bitset_, capacity_);
+        assert(index < capacity_);
         void* ptr = begin_ + index * SizeClass;
         shared_size_.fetch_sub(1, std::memory_order_release);
         return ptr;
@@ -109,12 +108,12 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
         assert(thread_id_ != thread_id());
         assert(is_ptr_valid(ptr));
         size_t index = ((uint8_t*)ptr - begin_) / SizeClass;
-        assert(index < Capacity);
-        shared_bitset_.set(index);
+        assert(index < capacity_);
+        detail::atomic_bitset_view::set(shared_bitset_, capacity_, index);
         shared_size_.fetch_add(1, std::memory_order_release);
     }
 
-    static constexpr std::size_t capacity() { return Capacity; }
+    std::size_t capacity() const { return capacity_; }
 
     std::size_t size_local() const {
         return local_size_;
@@ -155,15 +154,18 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
 
     uint8_t* begin_;
     uint32_t size_class_;
+    uint32_t capacity_;
+    uint32_t local_size_;
 
     std::atomic<uint64_t> state_;
 
-    uint32_t local_size_;
     std::atomic<uint64_t> local_size_atomic_;
-    std::array< uint16_t, Capacity > local_list_;
-
     std::atomic<uint64_t> shared_size_;
-    detail::atomic_bitset< round_up(Capacity) > shared_bitset_;
+
+    // TODO: need to get rid of division, replace by shift and power of two bins
+    // TODO: need to get rid of Capacity, SizeClass
+    uint16_t* local_list_;
+    std::atomic<uint64_t>* shared_bitset_;
 };
 
 // TODO: this is somehow useless class
@@ -581,8 +583,17 @@ protected:
         auto size = size_class_offset(SizeClass);
         void* buffer = segment_manager_.allocate_segment();
         auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.allocate_descriptor(segment_manager_.get_segment_index(buffer));
-        static_assert(sizeof(arena_descriptor<ArenaSize, SizeClass>) <= DescriptorSize);
-        new(desc) arena_descriptor< ArenaSize, SizeClass >(buffer);
+
+        uint8_t* ptr = align<8>((uint8_t*)desc + sizeof(arena_descriptor<ArenaSize, SizeClass>*) + 7);
+        size_t capacity = ArenaSize / SizeClass;
+
+        // TODO: local/shared lists should be allocated from separate memory than
+        // the descriptor, as their size will differ (probably 1 to 4 4kb pages, depending on SizeClass)
+        std::atomic<uint64_t>* shared_bitset = (std::atomic<uint64_t>*)ptr;
+        uint16_t* local_list = (uint16_t*)(ptr + ((capacity + 63) / 64) * 8);
+        assert((uint8_t*)(local_list + capacity) <= (uint8_t*)desc + DescriptorSize);
+        new(desc) arena_descriptor< ArenaSize, SizeClass >(
+            capacity, SizeClass, buffer, local_list, shared_bitset);
         return desc;
     }
 
