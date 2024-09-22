@@ -14,7 +14,12 @@ endif()
 include(cmake/md.cmake)
 include(cmake/sanitizers.cmake)
 
-add_compile_options(-march=native -save-temps -fverbose-asm -masm=intel)
+add_compile_options(-march=native)
+
+option(SAVE_TEMPS "save temporary files" OFF)
+if(SAVE_TEMPS)
+    add_compile_options(-save-temps -fverbose-asm -masm=intel)
+endif()
 
 sanitizers_init(ELASTICHEAP)
 
