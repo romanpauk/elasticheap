@@ -87,6 +87,8 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
     void deallocate_local(void* ptr) {
         assert(verify(thread_id()));
         assert(is_ptr_valid(ptr));
+        // TODO: this division is perf. sensitive. Can be replaced by shifts,
+        // or multiplication
         size_t index = ((uint8_t*)ptr - begin_) / SizeClass;
         assert(index < Capacity);
         local_list_[local_size_++] = index;
@@ -424,7 +426,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > cla
         return (version << 8) | state;
     }
 
-    template< typename T > static bool update_state(T* desc, uint64_t state, uint64_t update) {
+    template< std::size_t SizeClass > static bool update_state(arena_descriptor< ArenaSize, SizeClass >* desc, uint64_t state, uint64_t update) {
         const auto version = get_version(state);
         for(;;) {
             assert(!(state & update));
