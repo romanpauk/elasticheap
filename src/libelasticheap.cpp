@@ -2,10 +2,17 @@
 
 // See https://www.gnu.org/software/libc/manual/html_node/Replacing-malloc.html
 
-void* malloc(size_t size);
+void* malloc(size_t size) {
+    //
+}
+
 void* calloc(size_t size1, size_t size2);
 void* realloc(void* start, size_t size); // TODO: should be possible to realloc inside arena
-void free(void* memory);
+
+void free(void* memory) {
+    // From memory, we can get arena_descriptor_base and read size_class/capacity
+    // in runtime and cast arena_descriptor.
+}
 
 //aligned_alloc
 //malloc_usable_size

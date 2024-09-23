@@ -54,12 +54,14 @@ enum {
 };
 
 static constexpr std::size_t DescriptorSize = 1<<16;
+static constexpr size_t log2(size_t n) { return ((n<2) ? 1 : 1 + log2(n/2)); }
 
 template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 8 > struct arena_descriptor {
     arena_descriptor(std::size_t capacity, std::size_t size_class, void* buffer, uint16_t* local_list, std::atomic<uint64_t>* shared_bitset) {
         thread_id_ = thread_id();
         begin_ = (uint8_t*)buffer;
-        size_class_ = SizeClass;
+        size_class_ = size_class;
+        size_class_shift_ = log2(size_class) - 1;
         capacity_ = capacity;
         local_size_ = capacity;
         local_size_atomic_.store(capacity_, std::memory_order_relaxed);
@@ -132,7 +134,7 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
     uint8_t* end() { return begin_ + ArenaSize; }
 
     bool is_ptr_valid(void* ptr) {
-        assert(is_ptr_in_range(ptr, SizeClass, begin(), end()));
+        assert(is_ptr_in_range(ptr, size_class_, begin(), end()));
         assert(is_ptr_aligned(ptr, Alignment));
         return true;
     }
@@ -141,7 +143,6 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
     #if defined(MAGIC)
         assert(magic_ == 0xDEADBEEF);
     #endif
-        assert(size_class_ == SizeClass);
         if (thread_id)
             assert(thread_id_ == thread_id);
         return true;
@@ -154,6 +155,7 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
 
     uint8_t* begin_;
     uint32_t size_class_;
+    uint32_t size_class_shift_;
     uint32_t capacity_;
     uint32_t local_size_;
 
@@ -447,7 +449,6 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > cla
     }
 
 protected:
-    static constexpr size_t log2(size_t n) { return ((n<2) ? 1 : 1 + log2(n/2)); }
 
     static constexpr size_t size_class(size_t n) { return round_up(std::max(n, 8lu)); }
 
