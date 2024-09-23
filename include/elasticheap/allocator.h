@@ -70,7 +70,7 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
 
         shared_bitset_ = shared_bitset;
         shared_size_.store(0, std::memory_order_relaxed);
-        // detail::atomic_bitset_view::clear(shared_bitset_, capacity_);
+        detail::atomic_bitset_view::clear(shared_bitset_, capacity_);
     }
 
     void* allocate_local() {
@@ -584,7 +584,7 @@ protected:
         void* buffer = segment_manager_.allocate_segment();
         auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.allocate_descriptor(segment_manager_.get_segment_index(buffer));
 
-        uint8_t* ptr = align<8>((uint8_t*)desc + sizeof(arena_descriptor<ArenaSize, SizeClass>*) + 7);
+        uint8_t* ptr = align<8>((uint8_t*)desc + sizeof(arena_descriptor<ArenaSize, SizeClass>) + 7);
         size_t capacity = ArenaSize / SizeClass;
 
         // TODO: local/shared lists should be allocated from separate memory than
