@@ -79,8 +79,6 @@ template< std::size_t ArenaSize, std::size_t Alignment = 8 > struct arena_descri
         assert(verify(thread_id()));
         uint16_t index = local_list_[--local_size_];
         assert(index < capacity_);
-        // TODO: the code was much faster when it was templated
-        // and SizeClass was a constant
         uint8_t* ptr = begin_ + (index << size_class_shift_);
         assert(is_ptr_valid(ptr));
         local_size_atomic_.store(local_size_, std::memory_order_release);
@@ -91,7 +89,8 @@ template< std::size_t ArenaSize, std::size_t Alignment = 8 > struct arena_descri
         assert(verify(thread_id()));
         assert(is_ptr_valid(ptr));
         // TODO: this division is perf. sensitive. Can be replaced by shifts,
-        // or multiplication
+        // or multiplication. But even with shifts, it was much faster when
+        // it was just constant. Possibly store uint32 as an offset.
         size_t index = ((uint8_t*)ptr - begin_) >> size_class_shift_;
         assert(index < capacity_);
         local_list_[local_size_++] = index;
