@@ -25,6 +25,8 @@
 #define __failure(msg) do { fprintf(stderr, "%s:%d: %s: %s\n", \
     __FILE__, __LINE__, __PRETTY_FUNCTION__, msg); } while(0)
 
+#define __forceinline __attribute__((always_inline))
+
 inline bool is_ptr_aligned(void* ptr, std::size_t alignment) {
     return ((uintptr_t)ptr & (alignment - 1)) == 0;
 }

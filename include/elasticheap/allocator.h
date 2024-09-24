@@ -131,6 +131,8 @@ template< std::size_t ArenaSize, std::size_t Alignment = 8 > struct arena_descri
             + shared_size_.load(std::memory_order_acquire);
     }
 
+    std::size_t size_class() const { return size_class_; }
+
     uint8_t* begin() { return begin_; }
     uint8_t* end() { return begin_ + ArenaSize; }
 
@@ -452,45 +454,17 @@ protected:
     static constexpr size_t size_class(size_t n) { return round_up(std::max(n, 8lu)); }
 
     template< typename T > static constexpr size_t size_class() {
-        size_t n = round_up(std::max(sizeof(T), 8lu));
-        //if (n > 8)
-        //    if (n - n/2 >= sizeof(T)) return n - n/2;
-        return n;
+        return round_up(std::max(sizeof(T), 8lu));
     }
 
-    static constexpr size_t size_class_offset(size_t n) {
-        switch(n) {
-        case 8:     return 0;
-        //case 12:    return 1;
-        case 16:    return 1;
-        //case 24:    return 3;
-        case 32:    return 2;
-        //case 48:    return 5;
-        case 64:    return 3;
-        //case 96:    return 7;
-        case 128:   return 4;
-        //case 224:   return 9;
-        case 256:   return 5;
-        //case 384:   return 11;
-        case 512:   return 6;
-        //case 768:   return 13;
-        case 1024:  return 7;
-        //case 1536:  return 15;
-        case 2048:  return 8;
-        //case 3072:  return 17;
-        case 4096:  return 9;
-        //case 6144:  return 19;
-        case 8192:  return 10;
-        //case 12288: return 21;
-        case 16384: return 11;
-        default:
-            __failure("invalid class size");
-        }
+    static size_t size_class_offset(size_t n) {
+        assert(n < 16384);
+        return _tzcnt_u64(n);
     }
 
-    template< size_t SizeClass > void* allocate_impl() {
+    void* allocate_impl(std::size_t size_class) {
     again:
-        auto* desc = get_cached_descriptor<SizeClass>();
+        auto* desc = get_cached_descriptor(size_class);
 
         if (__likely(desc->size_local()))
             return desc->allocate_local();
@@ -506,15 +480,15 @@ protected:
         // Try to deallocate it, if it fails, it means other threads have
         // not yet come to a deallocation phase.
         if (__unlikely(desc->size() == desc->capacity())) {
-            deallocate_descriptor<SizeClass>(desc);
+            deallocate_descriptor(desc);
         }
 
-        reset_cached_descriptor<SizeClass>();
+        reset_cached_descriptor(size_class);
         goto again;
     }
 
-    template< size_t SizeClass > void deallocate_impl(void* ptr) noexcept {
-        auto* desc = get_descriptor<SizeClass>(ptr);
+    void deallocate_impl(void* ptr) noexcept {
+        auto* desc = get_descriptor(ptr);
         auto state = desc->state_.load(std::memory_order_acquire);
 
         if (desc->thread_id_ == thread_id()) {
@@ -531,31 +505,31 @@ protected:
 
         if (__unlikely(!(state & DescriptorQueued))) {
             if (update_state(desc, state, DescriptorQueued)) {
-                push_descriptor<SizeClass>(desc);
+                push_descriptor(desc);
             }
         }
 
         // If the descriptor is reused/deallocated, this will either be a valid
         // destruction request, or no-op due to erase() in deallocate.
         if (__unlikely(desc->size() == desc->capacity())) {
-            deallocate_descriptor<SizeClass>(desc);
+            deallocate_descriptor(desc);
         }
     }
 
-    template< size_t SizeClass > arena_descriptor<ArenaSize>* get_cached_descriptor() {
-        auto size = size_class_offset(SizeClass);
+    arena_descriptor<ArenaSize>* get_cached_descriptor(std::size_t size_class) {
+        auto size = size_class_offset(size_class);
         assert(size_class_cache_[size]);
         return (arena_descriptor< ArenaSize >*)size_class_cache_[size];
     }
 
-    template< size_t SizeClass > void initialize_cached_descriptor() {
-        auto size = size_class_offset(SizeClass);
+    void initialize_cached_descriptor(std::size_t size_class) {
+        auto size = size_class_offset(size_class);
         if (!size_class_cache_[size])
-            reset_cached_descriptor<SizeClass>();
+            reset_cached_descriptor(size_class);
     }
 
-    template< size_t SizeClass > arena_descriptor<ArenaSize>* reset_cached_descriptor() {
-        auto size = size_class_offset(SizeClass);
+    arena_descriptor<ArenaSize>* reset_cached_descriptor(std::size_t size_class) {
+        auto size = size_class_offset(size_class);
 
     again:
         uint32_t index;
@@ -567,25 +541,25 @@ protected:
             return desc;
         }
 
-        auto* desc = allocate_descriptor<SizeClass>();
+        auto* desc = allocate_descriptor(size_class);
         assert(desc->size() == desc->capacity());
         desc->state_.store(DescriptorCached, std::memory_order_release);
         size_class_cache_[size] = desc;
         return desc;
     }
 
-    template< typename std::size_t SizeClass > arena_descriptor<ArenaSize>* get_descriptor(void* ptr) {
+    arena_descriptor<ArenaSize>* get_descriptor(void* ptr) {
         auto index = segment_manager_.get_segment_index(ptr);
         return (arena_descriptor<ArenaSize>*)descriptor_manager_.get_descriptor(index);
     }
 
-    template< size_t SizeClass > arena_descriptor<ArenaSize>* allocate_descriptor() {
-        auto size = size_class_offset(SizeClass);
+    arena_descriptor<ArenaSize>* allocate_descriptor(std::size_t size_class) {
+        auto size = size_class_offset(size_class);
         void* buffer = segment_manager_.allocate_segment();
         auto* desc = (arena_descriptor<ArenaSize>*)descriptor_manager_.allocate_descriptor(segment_manager_.get_segment_index(buffer));
 
         uint8_t* ptr = align<8>((uint8_t*)desc + sizeof(arena_descriptor<ArenaSize>) + 7);
-        size_t capacity = ArenaSize / SizeClass;
+        size_t capacity = ArenaSize / size_class;
 
         // TODO: local/shared lists should be allocated from separate memory than
         // the descriptor, as their size will differ (probably 1 to 4 4kb pages, depending on SizeClass)
@@ -593,27 +567,27 @@ protected:
         uint16_t* local_list = (uint16_t*)(ptr + ((capacity + 63) / 64) * 8);
         assert((uint8_t*)(local_list + capacity) <= (uint8_t*)desc + DescriptorSize);
         new(desc) arena_descriptor< ArenaSize >(
-            capacity, SizeClass, buffer, local_list, shared_bitset);
+            capacity, size_class, buffer, local_list, shared_bitset);
         return desc;
     }
 
-    template< size_t SizeClass > void push_descriptor(arena_descriptor<ArenaSize>* desc) {
-        auto size = size_class_offset(SizeClass);
-        assert(get_cached_descriptor<SizeClass>() != desc);
-        assert(!size_classes_[size].get(descriptor_manager_.get_descriptor_index(desc)));
-        size_classes_[size].push(descriptor_manager_.get_descriptor_index(desc));
+    void push_descriptor(arena_descriptor<ArenaSize>* desc) {
+        auto offset = size_class_offset(desc->size_class());
+        assert(get_cached_descriptor(desc->size_class()) != desc);
+        assert(!size_classes_[offset].get(descriptor_manager_.get_descriptor_index(desc)));
+        size_classes_[offset].push(descriptor_manager_.get_descriptor_index(desc));
     }
 
-    template< size_t SizeClass > void deallocate_descriptor(arena_descriptor<ArenaSize>* desc) {
+    void deallocate_descriptor(arena_descriptor<ArenaSize>* desc) {
     again:
-        if (size_classes_[size_class_offset(SizeClass)].erase(descriptor_manager_.get_descriptor_index(desc))) {
+        if (size_classes_[size_class_offset(desc->size_class())].erase(descriptor_manager_.get_descriptor_index(desc))) {
             // The descriptor might have been reused and thus, erased by accident
             // If it become empty during time it was erased, put it back and retry.
             // If it is not empty after erase, someone just allocated. As it was
             // erased, it was not cached, put it back as it has to be the same size
             // class, too.
             if (desc->size() < desc->capacity()) {
-                push_descriptor<SizeClass>(desc);
+                push_descriptor(desc);
                 if (desc->size() == desc->capacity())
                     goto again;
             }
@@ -666,19 +640,19 @@ public:
     using value_type    = T;
 
     allocator() noexcept {
-        initialize_cached_descriptor<size_class<T>()>();
+        initialize_cached_descriptor(size_class<T>());
     }
 
     value_type* allocate(std::size_t n) {
         assert(n == 1);
         (void)n;
-        return reinterpret_cast< value_type* >(allocate_impl<size_class<T>()>());
+        return reinterpret_cast< value_type* >(allocate_impl(size_class<T>()));
     }
 
     void deallocate(value_type* ptr, std::size_t n) noexcept {
         assert(n == 1);
         (void)n;
-        deallocate_impl<size_class<T>()>(ptr);
+        deallocate_impl(ptr);
     }
 };
 
