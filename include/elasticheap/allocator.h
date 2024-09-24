@@ -56,7 +56,7 @@ enum {
 static constexpr std::size_t DescriptorSize = 1<<16;
 static constexpr size_t log2(size_t n) { return ((n<2) ? 1 : 1 + log2(n/2)); }
 
-template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 8 > struct arena_descriptor {
+template< std::size_t ArenaSize, std::size_t Alignment = 8 > struct arena_descriptor {
     arena_descriptor(std::size_t capacity, std::size_t size_class, void* buffer, uint16_t* local_list, std::atomic<uint64_t>* shared_bitset) {
         thread_id_ = thread_id();
         begin_ = (uint8_t*)buffer;
@@ -79,7 +79,9 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
         assert(verify(thread_id()));
         uint16_t index = local_list_[--local_size_];
         assert(index < capacity_);
-        uint8_t* ptr = begin_ + index * SizeClass;
+        // TODO: the code was much faster when it was templated
+        // and SizeClass was a constant
+        uint8_t* ptr = begin_ + (index << size_class_shift_);
         assert(is_ptr_valid(ptr));
         local_size_atomic_.store(local_size_, std::memory_order_release);
         return ptr;
@@ -90,7 +92,7 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
         assert(is_ptr_valid(ptr));
         // TODO: this division is perf. sensitive. Can be replaced by shifts,
         // or multiplication
-        size_t index = ((uint8_t*)ptr - begin_) / SizeClass;
+        size_t index = ((uint8_t*)ptr - begin_) >> size_class_shift_;
         assert(index < capacity_);
         local_list_[local_size_++] = index;
         local_size_atomic_.store(local_size_, std::memory_order_release);
@@ -100,7 +102,7 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
         assert(verify());
         size_t index = detail::atomic_bitset_view::pop_first(shared_bitset_, capacity_);
         assert(index < capacity_);
-        void* ptr = begin_ + index * SizeClass;
+        void* ptr = begin_ + (index << size_class_shift_);
         shared_size_.fetch_sub(1, std::memory_order_release);
         return ptr;
     }
@@ -109,7 +111,7 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
         assert(verify());
         assert(thread_id_ != thread_id());
         assert(is_ptr_valid(ptr));
-        size_t index = ((uint8_t*)ptr - begin_) / SizeClass;
+        size_t index = ((uint8_t*)ptr - begin_) >> size_class_shift_;
         assert(index < capacity_);
         detail::atomic_bitset_view::set(shared_bitset_, capacity_, index);
         shared_size_.fetch_add(1, std::memory_order_release);
@@ -164,8 +166,6 @@ template< std::size_t ArenaSize, std::size_t SizeClass, std::size_t Alignment = 
     std::atomic<uint64_t> local_size_atomic_;
     std::atomic<uint64_t> shared_size_;
 
-    // TODO: need to get rid of division, replace by shift and power of two bins
-    // TODO: need to get rid of Capacity, SizeClass
     uint16_t* local_list_;
     std::atomic<uint64_t>* shared_bitset_;
 };
@@ -430,7 +430,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > cla
         return (version << 8) | state;
     }
 
-    template< std::size_t SizeClass > static bool update_state(arena_descriptor< ArenaSize, SizeClass >* desc, uint64_t state, uint64_t update) {
+    static bool update_state(arena_descriptor< ArenaSize >* desc, uint64_t state, uint64_t update) {
         const auto version = get_version(state);
         for(;;) {
             assert(!(state & update));
@@ -454,36 +454,36 @@ protected:
 
     template< typename T > static constexpr size_t size_class() {
         size_t n = round_up(std::max(sizeof(T), 8lu));
-        if (n > 8)
-            if (n - n/2 >= sizeof(T)) return n - n/2;
+        //if (n > 8)
+        //    if (n - n/2 >= sizeof(T)) return n - n/2;
         return n;
     }
 
     static constexpr size_t size_class_offset(size_t n) {
         switch(n) {
         case 8:     return 0;
-        case 12:    return 1;
-        case 16:    return 2;
-        case 24:    return 3;
-        case 32:    return 4;
-        case 48:    return 5;
-        case 64:    return 6;
-        case 96:    return 7;
-        case 128:   return 8;
-        case 224:   return 9;
-        case 256:   return 10;
-        case 384:   return 11;
-        case 512:   return 12;
-        case 768:   return 13;
-        case 1024:  return 14;
-        case 1536:  return 15;
-        case 2048:  return 16;
-        case 3072:  return 17;
-        case 4096:  return 18;
-        case 6144:  return 19;
-        case 8192:  return 20;
-        case 12288: return 21;
-        case 16384: return 22;
+        //case 12:    return 1;
+        case 16:    return 1;
+        //case 24:    return 3;
+        case 32:    return 2;
+        //case 48:    return 5;
+        case 64:    return 3;
+        //case 96:    return 7;
+        case 128:   return 4;
+        //case 224:   return 9;
+        case 256:   return 5;
+        //case 384:   return 11;
+        case 512:   return 6;
+        //case 768:   return 13;
+        case 1024:  return 7;
+        //case 1536:  return 15;
+        case 2048:  return 8;
+        //case 3072:  return 17;
+        case 4096:  return 9;
+        //case 6144:  return 19;
+        case 8192:  return 10;
+        //case 12288: return 21;
+        case 16384: return 11;
         default:
             __failure("invalid class size");
         }
@@ -543,10 +543,10 @@ protected:
         }
     }
 
-    template< size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* get_cached_descriptor() {
+    template< size_t SizeClass > arena_descriptor<ArenaSize>* get_cached_descriptor() {
         auto size = size_class_offset(SizeClass);
         assert(size_class_cache_[size]);
-        return (arena_descriptor< ArenaSize, SizeClass >*)size_class_cache_[size];
+        return (arena_descriptor< ArenaSize >*)size_class_cache_[size];
     }
 
     template< size_t SizeClass > void initialize_cached_descriptor() {
@@ -555,13 +555,13 @@ protected:
             reset_cached_descriptor<SizeClass>();
     }
 
-    template< size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* reset_cached_descriptor() {
+    template< size_t SizeClass > arena_descriptor<ArenaSize>* reset_cached_descriptor() {
         auto size = size_class_offset(SizeClass);
 
     again:
         uint32_t index;
         while(size_classes_[size].pop(index)) {
-            auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_descriptor(index);
+            auto* desc = (arena_descriptor<ArenaSize>*)descriptor_manager_.get_descriptor(index);
             assert(desc->size());
             desc->state_.store(DescriptorCached, std::memory_order_release);
             size_class_cache_[size] = desc;
@@ -575,17 +575,17 @@ protected:
         return desc;
     }
 
-    template< typename std::size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* get_descriptor(void* ptr) {
+    template< typename std::size_t SizeClass > arena_descriptor<ArenaSize>* get_descriptor(void* ptr) {
         auto index = segment_manager_.get_segment_index(ptr);
-        return (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.get_descriptor(index);
+        return (arena_descriptor<ArenaSize>*)descriptor_manager_.get_descriptor(index);
     }
 
-    template< size_t SizeClass > arena_descriptor<ArenaSize, SizeClass>* allocate_descriptor() {
+    template< size_t SizeClass > arena_descriptor<ArenaSize>* allocate_descriptor() {
         auto size = size_class_offset(SizeClass);
         void* buffer = segment_manager_.allocate_segment();
-        auto* desc = (arena_descriptor<ArenaSize, SizeClass>*)descriptor_manager_.allocate_descriptor(segment_manager_.get_segment_index(buffer));
+        auto* desc = (arena_descriptor<ArenaSize>*)descriptor_manager_.allocate_descriptor(segment_manager_.get_segment_index(buffer));
 
-        uint8_t* ptr = align<8>((uint8_t*)desc + sizeof(arena_descriptor<ArenaSize, SizeClass>) + 7);
+        uint8_t* ptr = align<8>((uint8_t*)desc + sizeof(arena_descriptor<ArenaSize>) + 7);
         size_t capacity = ArenaSize / SizeClass;
 
         // TODO: local/shared lists should be allocated from separate memory than
@@ -593,19 +593,19 @@ protected:
         std::atomic<uint64_t>* shared_bitset = (std::atomic<uint64_t>*)ptr;
         uint16_t* local_list = (uint16_t*)(ptr + ((capacity + 63) / 64) * 8);
         assert((uint8_t*)(local_list + capacity) <= (uint8_t*)desc + DescriptorSize);
-        new(desc) arena_descriptor< ArenaSize, SizeClass >(
+        new(desc) arena_descriptor< ArenaSize >(
             capacity, SizeClass, buffer, local_list, shared_bitset);
         return desc;
     }
 
-    template< size_t SizeClass > void push_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
+    template< size_t SizeClass > void push_descriptor(arena_descriptor<ArenaSize>* desc) {
         auto size = size_class_offset(SizeClass);
         assert(get_cached_descriptor<SizeClass>() != desc);
         assert(!size_classes_[size].get(descriptor_manager_.get_descriptor_index(desc)));
         size_classes_[size].push(descriptor_manager_.get_descriptor_index(desc));
     }
 
-    template< size_t SizeClass > void deallocate_descriptor(arena_descriptor<ArenaSize, SizeClass>* desc) {
+    template< size_t SizeClass > void deallocate_descriptor(arena_descriptor<ArenaSize>* desc) {
     again:
         if (size_classes_[size_class_offset(SizeClass)].erase(descriptor_manager_.get_descriptor_index(desc))) {
             // The descriptor might have been reused and thus, erased by accident
