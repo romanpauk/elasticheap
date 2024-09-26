@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <immintrin.h>
 #include <stdio.h>
 #include <cstdint>
 
@@ -45,7 +46,11 @@ template < std::size_t Alignment, typename T > T* mask(T* ptr) {
     return (T*)((uintptr_t)ptr & ~(Alignment - 1));
 }
 
-static constexpr uint32_t round_up(uint32_t v) {
+static std::size_t round_up(std::size_t v) {
+    return 1 << (64 - _lzcnt_u64(v - 1));
+}
+
+static constexpr std::size_t round_up_constexpr(std::size_t v) {
     v--;
     v |= v >> 1;
     v |= v >> 2;

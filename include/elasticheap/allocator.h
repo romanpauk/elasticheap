@@ -25,6 +25,7 @@
 
 //#define STATS
 #define MAGIC
+#define ALLOCATOR_1
 
 namespace elasticheap {
     static constexpr std::size_t MetadataPageSize = 4096;
@@ -54,7 +55,20 @@ enum {
 };
 
 static constexpr std::size_t DescriptorSize = 1<<16;
-static constexpr size_t log2(size_t n) { return ((n<2) ? 1 : 1 + log2(n/2)); }
+
+static constexpr std::size_t MinimalClassSize = 8;
+
+static constexpr std::size_t log2(std::size_t n) {
+    return ((n<2) ? 1 : 1 + log2(n/2));
+}
+
+static constexpr std::size_t size_class_constexpr(std::size_t n) {
+    return round_up_constexpr(std::max(n, MinimalClassSize));
+}
+
+static std::size_t size_class(std::size_t n) {
+    return round_up(std::max(n, MinimalClassSize));
+}
 
 template< std::size_t ArenaSize, std::size_t Alignment = 8 > struct arena_descriptor {
     arena_descriptor(std::size_t capacity, std::size_t size_class, void* buffer, uint16_t* local_list, std::atomic<uint64_t>* shared_bitset) {
@@ -270,6 +284,11 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
         return ptr;
     }
 
+    bool is_ptr_in_range(void* ptr) const {
+        auto p = reinterpret_cast<uint8_t*>(ptr);
+        return (uint8_t*)mmap_ <= p && p < ((uint8_t*)mmap_ + MmapSize);
+    }
+
     void* begin() const { return memory_; }
     void* end() const { return (uint8_t*)memory_ + PageSize * PageCount; }
 
@@ -404,6 +423,10 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
         return true;
     }
 
+    bool is_ptr_in_range(void* ptr) const {
+        return page_manager_.is_ptr_in_range(ptr);
+    }
+
 private:
     page_manager< PageSize, MaxSize > page_manager_;
     descriptor_manager< page_descriptor, PageCount, MetadataPageSize > page_descriptors_;
@@ -418,7 +441,8 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > cla
 
     static constexpr std::size_t PageArenaCount = (PageSize)/(ArenaSize);
 
-    static uint64_t get_version() {
+public:
+    uint64_t get_version() {
         return version_.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -431,7 +455,7 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > cla
         return (version << 8) | state;
     }
 
-    static bool update_state(arena_descriptor< ArenaSize >* desc, uint64_t state, uint64_t update) {
+    bool update_state(arena_descriptor< ArenaSize >* desc, uint64_t state, uint64_t update) {
         const auto version = get_version(state);
         for(;;) {
             assert(!(state & update));
@@ -447,14 +471,6 @@ template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize > cla
             if (state & update)
                 return false;
         }
-    }
-
-protected:
-
-    static constexpr size_t size_class(size_t n) { return round_up(std::max(n, 8lu)); }
-
-    template< typename T > static constexpr size_t size_class() {
-        return round_up(std::max(sizeof(T), 8lu));
     }
 
     static size_t size_class_offset(size_t n) {
@@ -523,8 +539,8 @@ protected:
     }
 
     void initialize_cached_descriptor(std::size_t size_class) {
-        auto size = size_class_offset(size_class);
-        if (!size_class_cache_[size])
+        auto offset = size_class_offset(size_class);
+        if (__unlikely(!size_class_cache_[offset]))
             reset_cached_descriptor(size_class);
     }
 
@@ -597,62 +613,80 @@ protected:
         }
     }
 
+    bool is_ptr_in_range(void* ptr) {
+        return segment_manager_.is_ptr_in_range(ptr);
+    }
+private:
     //
     // TODO: use some more separated global/local state
     // Global       - shared
     // Local        - thread-local or cpu-local
-    // Thread-local - thread-local
+    // Thread-local - exactly thread-local
     //
 
     // Global
     // TODO: descriptors waste a lot of space, need a few descriptor classes
-    static descriptor_manager<std::array<uint8_t, DescriptorSize>, MaxSize / ArenaSize, PageSize> descriptor_manager_;
+    descriptor_manager<std::array<uint8_t, DescriptorSize>, MaxSize / ArenaSize, PageSize> descriptor_manager_ {};
 
     // Global
-    static std::atomic<uint64_t> version_;
+    std::atomic<uint64_t> version_ {};
 
     // Global (should be CPU-local?)
-    static segment_manager<PageSize, ArenaSize, MaxSize> segment_manager_;
+    segment_manager<PageSize, ArenaSize, MaxSize> segment_manager_ {};
 
     // Global (should be CPU-local?)
-    static std::array< detail::elastic_atomic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> size_classes_;
+    std::array< detail::elastic_atomic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> size_classes_ {};
 
-    // Thread-local
-    static std::array<void*, 23> size_class_cache_;
+    // TODO: needs to be Thread-local
+    std::array<void*, 23> size_class_cache_ {};
 };
 
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> segment_manager<PageSize, ArenaSize, MaxSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::segment_manager_;
+template< typename Tag > struct allocator_base {
+    using allocator_type = arena_allocator_base< 1<<21, 1<<17, 1ull<<40 >;
 
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::atomic< uint64_t > arena_allocator_base<PageSize, ArenaSize, MaxSize>::version_;
+    allocator_type* base() {
+        static allocator_type* alloc = new allocator_type;
+        return alloc;
+    }
+};
 
-template < std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> descriptor_manager<std::array<uint8_t, DescriptorSize>, MaxSize / ArenaSize, PageSize> arena_allocator_base<PageSize, ArenaSize, MaxSize>::descriptor_manager_;
-
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array< detail::elastic_atomic_bitset_heap<uint32_t, MaxSize/ArenaSize, MetadataPageSize>, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_classes_;
-
-template< std::size_t PageSize, std::size_t ArenaSize, std::size_t MaxSize> std::array<void*, 23> arena_allocator_base<PageSize, ArenaSize, MaxSize>::size_class_cache_;
-
-template < typename T > class allocator
-    : public arena_allocator_base< 1<<21, 1<<17, 1ull<<40 >
-{
+template < typename T > class allocator: public allocator_base<void> {
     template <typename U> friend class allocator;
+
+    allocator_type* allocator_;
 
 public:
     using value_type    = T;
 
-    allocator() noexcept {
-        initialize_cached_descriptor(size_class<T>());
+    allocator(): allocator_(base()) {
+    #if defined(ALLOCATOR_1)
+        allocator_->initialize_cached_descriptor(size_class(sizeof(T)));
+    #endif
     }
 
     value_type* allocate(std::size_t n) {
+    #if defined(ALLOCATOR_1)
         assert(n == 1);
-        (void)n;
-        return reinterpret_cast< value_type* >(allocate_impl(size_class<T>()));
+        return reinterpret_cast< value_type* >(allocator_->allocate_impl(size_class(sizeof(T))));
+    #else
+        std::size_t size = size_class(sizeof(T) * n);
+        if (__likely(size < 1024)) {
+            base()->initialize_cached_descriptor(size);
+            return reinterpret_cast< value_type* >(base()->allocate_impl(size));
+        } else {
+            return (value_type*)mmap(0, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+        }
+    #endif
     }
 
     void deallocate(value_type* ptr, std::size_t n) noexcept {
-        assert(n == 1);
-        (void)n;
-        deallocate_impl(ptr);
+    #if !defined(ALLOCATOR_1)
+        if (allocator_->is_ptr_in_range(ptr)) {
+    #endif
+        allocator_->deallocate_impl(ptr);
+    #if !defined(ALLOCATOR_1)
+        }
+    #endif
     }
 };
 
