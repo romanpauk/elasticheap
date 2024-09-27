@@ -15,30 +15,41 @@
 #define DEBUG(...)
 #endif
 
-static elasticheap::allocator<uint8_t> allocator;
+using allocator_type = elasticheap::allocator<uint8_t>;
 
 void* malloc(size_t size) {
-    void* p = allocator.allocate(size);
+    allocator_type alloc;
+    void* p = alloc.allocate(size);
     DEBUG("%p = malloc(%lu)\n", p, size);
     return p;
 }
 
 void* calloc(size_t size1, size_t size2) {
-    void* p = allocator.allocate(std::min<size_t>(size1 * size2, 1));
-    memset(p, 0, size1 * size2);
+    allocator_type alloc;
+    auto bytes = std::max<size_t>(size1 * size2, 1);
+    void* p = alloc.allocate(bytes);
+    memset(p, 0, bytes);
     DEBUG("%p = calloc(%lu, %lu)\n", p, size1, size2);
     return p;
 }
 
-void* realloc(void* start, size_t size) {
-    // TODO: should be possible to realloc inside arena
-    DEBUG("%s: unimplemented", __FUNCTION__);
-    return 0;
+void* realloc(void* ptr, size_t size) {
+    allocator_type alloc;
+    if (__likely(ptr != 0)) {
+        void* p = alloc.reallocate((uint8_t*)ptr, size);
+        DEBUG("%p = realloc(%p, %lu)\n", ptr, p, size);
+        return p;
+    }
+
+    void* p = alloc.allocate(size);
+    DEBUG("%p = realloc(0, %lu)\n", p, size);
+    return p;
 }
 
 void free(void* ptr) {
+    allocator_type alloc;
     DEBUG("free(%p)\n", ptr);
-    allocator.deallocate((uint8_t*)ptr, 0);
+    alloc.deallocate((uint8_t*)ptr, 0);
 }
 
 //aligned_alloc

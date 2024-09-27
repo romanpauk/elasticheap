@@ -25,7 +25,7 @@
 
 //#define STATS
 #define MAGIC
-#define ALLOCATOR_1
+//#define ALLOCATOR_1
 
 namespace elasticheap {
     static constexpr std::size_t MetadataPageSize = 4096;
@@ -308,6 +308,11 @@ private:
         return true;
     }
 
+    bool is_ptr_in_range(void* ptr, std::size_t size, void*, void*) const {
+        return true;
+    }
+
+
     alignas(64) std::atomic<uint64_t> memory_size_ = 0;
     void* mmap_ = 0;
     void* memory_ = 0;
@@ -366,7 +371,7 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
     }
 
     void* get_segment(void* ptr) const {
-        assert(is_ptr_in_range(ptr, 1, page_manager_.begin(), page_manager_.end()));
+        //assert(is_ptr_in_range(ptr, 1, page_manager_.begin(), page_manager_.end()));
         return mask<SegmentSize>(ptr);
     }
 
@@ -418,7 +423,7 @@ template< std::size_t PageSize, std::size_t SegmentSize, std::size_t MaxSize > s
     }
 
     bool is_segment_valid(void* ptr) const {
-        assert(is_ptr_in_range(ptr, SegmentSize, page_manager_.begin(), page_manager_.end()));
+        //assert(is_ptr_in_range(ptr, SegmentSize, page_manager_.begin(), page_manager_.end()));
         assert(is_ptr_aligned(ptr, SegmentSize));
         return true;
     }
@@ -478,7 +483,7 @@ public:
         return _tzcnt_u64(n);
     }
 
-    void* allocate_impl(std::size_t size_class) {
+    void* allocate(std::size_t size_class) {
     again:
         auto* desc = get_cached_descriptor(size_class);
 
@@ -503,7 +508,16 @@ public:
         goto again;
     }
 
-    void deallocate_impl(void* ptr) noexcept {
+    void* reallocate(void* ptr, std::size_t n) {
+        assert(n);
+        auto* desc = get_descriptor(ptr);
+        if (desc->size_class() >= n) {
+            return ptr;
+        }
+        return 0;
+    }
+
+    void deallocate(void* ptr) noexcept {
         auto* desc = get_descriptor(ptr);
         auto state = desc->state_.load(std::memory_order_acquire);
 
@@ -659,9 +673,7 @@ public:
     using value_type    = T;
 
     allocator(): allocator_(base()) {
-    #if defined(ALLOCATOR_1)
         allocator_->initialize_cached_descriptor(size_class(sizeof(T)));
-    #endif
     }
 
     value_type* allocate(std::size_t n) {
@@ -669,10 +681,13 @@ public:
         assert(n == 1);
         return reinterpret_cast< value_type* >(allocator_->allocate_impl(size_class(sizeof(T))));
     #else
+        if (__likely(n == 1))
+            return reinterpret_cast< value_type* >(allocator_->allocate(size_class(sizeof(T))));
+
         std::size_t size = size_class(sizeof(T) * n);
         if (__likely(size < 1024)) {
             base()->initialize_cached_descriptor(size);
-            return reinterpret_cast< value_type* >(base()->allocate_impl(size));
+            return reinterpret_cast< value_type* >(base()->allocate(size));
         } else {
             return (value_type*)mmap(0, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
         }
@@ -680,13 +695,27 @@ public:
     }
 
     void deallocate(value_type* ptr, std::size_t n) noexcept {
-    #if !defined(ALLOCATOR_1)
-        if (allocator_->is_ptr_in_range(ptr)) {
-    #endif
+    #if defined(ALLOCATOR_1)
+        assert(n == 1);
         allocator_->deallocate_impl(ptr);
-    #if !defined(ALLOCATOR_1)
+    #else
+        if (allocator_->is_ptr_in_range(ptr)) {
+            allocator_->deallocate(ptr);
+        } else {
+            // TODO
         }
     #endif
+    }
+
+    value_type* reallocate(value_type* ptr, std::size_t n) noexcept {
+        auto *p = allocator_->reallocate(ptr, sizeof(T) * n);
+        if (p)
+            return reinterpret_cast< value_type* >(p);
+
+        auto* r = allocator_->allocate(sizeof(T) * n);
+        memcpy(r, p, sizeof(T) * n);
+        allocator_->deallocate(ptr);
+        return reinterpret_cast< value_type* >(r);
     }
 };
 
