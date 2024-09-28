@@ -91,12 +91,25 @@ template< std::size_t ArenaSize, std::size_t Alignment = 8 > struct arena_descri
 
     void* allocate_local() {
         assert(verify(thread_id()));
-        uint16_t index = local_list_[--local_size_];
-        assert(index < capacity_);
+        auto index = allocate_local_index();
         uint8_t* ptr = begin_ + (index << size_class_shift_);
         assert(is_ptr_valid(ptr));
-        local_size_atomic_.store(local_size_, std::memory_order_release);
         return ptr;
+    }
+
+    template< std::size_t SizeClass > void* allocate_local_size_class() {
+        assert(verify(thread_id()));
+        auto index = allocate_local_index();
+        uint8_t* ptr = begin_ + index * SizeClass;
+        assert(is_ptr_valid(ptr));
+        return ptr;
+    }
+
+    uint16_t allocate_local_index() {
+        uint16_t index = local_list_[--local_size_];
+        assert(index < capacity_);
+        local_size_atomic_.store(local_size_, std::memory_order_release);
+        return index;
     }
 
     void deallocate_local(void* ptr) {
@@ -106,9 +119,20 @@ template< std::size_t ArenaSize, std::size_t Alignment = 8 > struct arena_descri
         // or multiplication. But even with shifts, it was much faster when
         // it was just constant. Possibly store uint32 as an offset.
         size_t index = ((uint8_t*)ptr - begin_) >> size_class_shift_;
+        deallocate_local_index(index);
+    }
+
+    void deallocate_local_index(uint16_t index) {
         assert(index < capacity_);
         local_list_[local_size_++] = index;
         local_size_atomic_.store(local_size_, std::memory_order_release);
+    }
+
+    template< std::size_t SizeClass > void deallocate_local_size_class(void* ptr) {
+        assert(verify(thread_id()));
+        assert(is_ptr_valid(ptr));
+        size_t index = ((uint8_t*)ptr - begin_) >> SizeClass;
+        deallocate_local_index(index);
     }
 
     void* allocate_shared() {
@@ -286,7 +310,7 @@ template< std::size_t PageSize, std::size_t MaxSize > struct page_manager {
 
     bool is_ptr_in_range(void* ptr) const {
         auto p = reinterpret_cast<uint8_t*>(ptr);
-        return (uint8_t*)mmap_ <= p && p < ((uint8_t*)mmap_ + MmapSize);
+        return ((uint8_t*)ptr - (uint8_t*)mmap_) <= MmapSize;
     }
 
     void* begin() const { return memory_; }
@@ -493,8 +517,29 @@ public:
         if (__likely(desc->size_shared()))
             return desc->allocate_shared();
 
+        allocate_reset(desc);
+        goto again;
+    }
+
+    template< std::size_t SizeClass > void* allocate_size_class() {
+    again:
+        auto* desc = get_cached_descriptor(SizeClass);
+
+        if (__likely(desc->size_local()))
+            return desc->template allocate_local_size_class<SizeClass>();
+
+        if (__likely(desc->size_shared()))
+            return desc->allocate_shared();
+
+        allocate_reset(desc);
+        goto again;
+    }
+
+    void allocate_reset(arena_descriptor< ArenaSize >* desc) {
         // Descriptor can't be destroyed before getting uncached
         auto version = get_version();
+        auto size_class = desc->size_class();
+
         desc->state_.store(make_state(version, DescriptorCached | DescriptorUncached), std::memory_order_release);
 
         // Descriptor can be destroyed now or going through destruction.
@@ -505,7 +550,6 @@ public:
         }
 
         reset_cached_descriptor(size_class);
-        goto again;
     }
 
     void* reallocate(void* ptr, std::size_t n) {
@@ -527,6 +571,23 @@ public:
             desc->deallocate_shared(ptr);
         }
 
+        deallocate_reset(desc, state);
+    }
+
+    template< std::size_t SizeClass > void deallocate_size_class(void* ptr) noexcept {
+        auto* desc = get_descriptor(ptr);
+        auto state = desc->state_.load(std::memory_order_acquire);
+
+        if (desc->thread_id_ == thread_id()) {
+            desc->template deallocate_local_size_class<SizeClass>(ptr);
+        } else {
+            desc->deallocate_shared(ptr);
+        }
+
+        deallocate_reset(desc, state);
+    }
+
+    void deallocate_reset(arena_descriptor< ArenaSize >* desc, uint64_t state) {
         // After size goes to 0, descriptor can be deallocated/reused at any time
         // Carefully use version to not modify it.
 
@@ -679,10 +740,12 @@ public:
     value_type* allocate(std::size_t n) {
     #if defined(ALLOCATOR_1)
         assert(n == 1);
-        return reinterpret_cast< value_type* >(allocator_->allocate_impl(size_class(sizeof(T))));
+        return reinterpret_cast< value_type* >(allocator_->allocate_size_class<
+            size_class_constexpr(sizeof(T))>());
     #else
         if (__likely(n == 1))
-            return reinterpret_cast< value_type* >(allocator_->allocate(size_class(sizeof(T))));
+            return reinterpret_cast< value_type* >(allocator_->allocate_size_class<
+                size_class_constexpr(sizeof(T)) >());
 
         std::size_t size = size_class(sizeof(T) * n);
         if (__likely(size < 1024)) {
@@ -697,9 +760,14 @@ public:
     void deallocate(value_type* ptr, std::size_t n) noexcept {
     #if defined(ALLOCATOR_1)
         assert(n == 1);
-        allocator_->deallocate_impl(ptr);
+        allocator_->deallocate_size_class<size_class_constexpr(sizeof(T))>(ptr);
     #else
-        if (allocator_->is_ptr_in_range(ptr)) {
+        if (__likely(allocator_->is_ptr_in_range(ptr))) {
+            if (__likely(n == 1)) {
+                allocator_->deallocate_size_class<size_class_constexpr(sizeof(T))>(ptr);
+                return;
+            }
+
             allocator_->deallocate(ptr);
         } else {
             // TODO
