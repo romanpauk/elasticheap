@@ -106,6 +106,8 @@ template< std::size_t ArenaSize, std::size_t Alignment = 8 > struct arena_descri
     }
 
     uint16_t allocate_local_index() {
+        assert(local_size_ > 0);
+        assert(local_size_ <= capacity_);
         uint16_t index = local_list_[--local_size_];
         assert(index < capacity_);
         local_size_atomic_.store(local_size_, std::memory_order_release);
@@ -124,6 +126,7 @@ template< std::size_t ArenaSize, std::size_t Alignment = 8 > struct arena_descri
 
     void deallocate_local_index(uint16_t index) {
         assert(index < capacity_);
+        assert(local_size_ < capacity_);
         local_list_[local_size_++] = index;
         local_size_atomic_.store(local_size_, std::memory_order_release);
     }
@@ -131,7 +134,7 @@ template< std::size_t ArenaSize, std::size_t Alignment = 8 > struct arena_descri
     template< std::size_t SizeClass > void deallocate_local_size_class(void* ptr) {
         assert(verify(thread_id()));
         assert(is_ptr_valid(ptr));
-        size_t index = ((uint8_t*)ptr - begin_) >> SizeClass;
+        size_t index = ((uint8_t*)ptr - begin_) / SizeClass;
         deallocate_local_index(index);
     }
 
@@ -716,12 +719,15 @@ private:
     std::array<void*, 23> size_class_cache_ {};
 };
 
-template< typename Tag > struct allocator_base {
-    using allocator_type = arena_allocator_base< 1<<21, 1<<17, 1ull<<40 >;
+using allocator_type = arena_allocator_base< 1<<21, 1<<17, 1ull<<40 >;
 
+template< typename Tag > struct allocator_base {
     allocator_type* base() {
-        static allocator_type* alloc = new allocator_type;
-        return alloc;
+        static allocator_type* ptr = []{
+            static allocator_type instance;
+            return &instance;
+        }();
+        return ptr;
     }
 };
 
@@ -734,6 +740,10 @@ public:
     using value_type    = T;
 
     allocator(): allocator_(base()) {
+        allocator_->initialize_cached_descriptor(size_class(sizeof(T)));
+    }
+
+    template< typename AllocatorT > allocator(AllocatorT& al): allocator_(al.allocator_) {
         allocator_->initialize_cached_descriptor(size_class(sizeof(T)));
     }
 
@@ -757,6 +767,16 @@ public:
     #endif
     }
 
+    value_type* allocate2(std::size_t n) {
+        std::size_t size = size_class(sizeof(T) * n);
+        if (__likely(size < 1024)) {
+            base()->initialize_cached_descriptor(size);
+            return reinterpret_cast< value_type* >(base()->allocate(size));
+        } else {
+            return (value_type*)mmap(0, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+        }
+    }
+
     void deallocate(value_type* ptr, std::size_t n) noexcept {
     #if defined(ALLOCATOR_1)
         assert(n == 1);
@@ -773,6 +793,12 @@ public:
             // TODO
         }
     #endif
+    }
+
+    void deallocate2(value_type* ptr, std::size_t n) noexcept {
+        if (__likely(allocator_->is_ptr_in_range(ptr))) {
+            allocator_->deallocate(ptr);
+        }
     }
 
     value_type* reallocate(value_type* ptr, std::size_t n) noexcept {
