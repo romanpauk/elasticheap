@@ -193,17 +193,40 @@ static void allocator_unordered_map(benchmark::State& state) {
     state.SetItemsProcessed(state.iterations() * state.range());
 }
 
-static void arena_allocator_unordered_map(benchmark::State& state) {
+static void allocator_map(benchmark::State& state) {
     for (auto _ : state) {
-        std::unordered_map< uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<uint64_t>,
-        elasticheap::allocator<std::pair<const uint64_t, uint64_t>>> data;
-        for(size_t j = 0; j < state.range(); ++j)
+        std::map< uint64_t, uint64_t, std::less<uint64_t>,
+            std::allocator<std::pair<const uint64_t, uint64_t>>> data;
+        for (size_t j = 0; j < state.range(); ++j)
             data.emplace(j, 0);
     }
 
     state.SetItemsProcessed(state.iterations() * state.range());
 }
 
+static void arena_allocator_unordered_map(benchmark::State& state) {
+    for (auto _ : state) {
+        std::unordered_map< uint64_t, uint64_t, std::hash<uint64_t>, std::equal_to<uint64_t>,
+        elasticheap::allocator<std::pair<const uint64_t, uint64_t>>> data;
+        for(size_t j = 0; j < state.range(); ++j)
+            //data.emplace_hint(data.end(), j, 0);
+            data.emplace(j, 0);
+    }
+
+    state.SetItemsProcessed(state.iterations() * state.range());
+}
+
+static void arena_allocator_map(benchmark::State& state) {
+    for (auto _ : state) {
+        std::map< uint64_t, uint64_t, std::less<uint64_t>,
+        elasticheap::allocator<std::pair<const uint64_t, uint64_t>>> data;
+        for(size_t j = 0; j < state.range(); ++j)
+            //data.emplace_hint(data.end(), j, 0);
+            data.emplace(j, 0);
+    }
+
+    state.SetItemsProcessed(state.iterations() * state.range());
+}
 
 //BENCHMARK(arena_allocator_allocate_uint64_t_arena_only)->Range(1, 1<<15)->UseRealTime();
 BENCHMARK(arena_allocator_allocate_uint64_t)->Range(1, 1<<N)->UseRealTime();
@@ -212,3 +235,6 @@ BENCHMARK(allocator_allocate_sizes)->Range(1, 1<<N)->UseRealTime();
 BENCHMARK(allocator_allocate_uint64_t)->Range(1, 1<<N)->UseRealTime();
 BENCHMARK(allocator_unordered_map)->UseRealTime()->Range(1, 1<<N);
 BENCHMARK(arena_allocator_unordered_map)->UseRealTime()->Range(1, 1<<N);
+BENCHMARK(allocator_map)->UseRealTime()->Range(1, 1<<N);
+BENCHMARK(arena_allocator_map)->UseRealTime()->Range(1, 1<<N);
+
